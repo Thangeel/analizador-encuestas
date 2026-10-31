@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analizador de encuestas · Mesa de Servicios</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --panel: #ffffff;
+      --bg: #f4f7fb;
+      --blue: #2563eb;
+      --blue-soft: #dbeafe;
+      --green: #0f766e;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --shadow: 0 12px 30px rgba(15, 23, 42, .07);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--bg); font: 14px/1.5 Inter, Segoe UI, Arial, sans-serif; }
+    .shell { max-width: 1440px; margin: 0 auto; padding: 28px; }
+    .hero { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 22px; }
+    h1 { margin: 0 0 6px; font-size: clamp(24px, 3vw, 36px); letter-spacing: -.03em; }
+    h2 { margin: 0; font-size: 19px; }
+    h3 { margin: 0 0 12px; font-size: 15px; }
+    p { margin: 5px 0; }
+    .muted { color: var(--muted); }
+    .badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 700; background: var(--blue-soft); color: #1d4ed8; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+    button, .file-label { border: 0; border-radius: 9px; padding: 10px 14px; cursor: pointer; font-weight: 700; font-size: 13px; }
+    button.primary, .file-label { background: var(--blue); color: white; }
+    button.secondary { background: white; color: var(--ink); border: 1px solid var(--line); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    input[type=file] { display: none; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; }
+    .upload { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+    .upload-info { display: flex; align-items: center; gap: 13px; }
+    .upload-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px; background: var(--blue-soft); color: var(--blue); font-size: 20px; font-weight: 900; }
+    .controls { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    select, input[type=text] { width: 100%; background: white; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; color: var(--ink); }
+    .status { padding: 10px 12px; border-radius: 9px; background: #f8fafc; border: 1px solid var(--line); color: var(--muted); }
+    .status.error { color: var(--red); background: #fef2f2; border-color: #fecaca; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-bottom: 18px; }
+    .metric { grid-column: span 2; min-height: 112px; }
+    .metric .label { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .metric .value { margin-top: 12px; font-size: 25px; font-weight: 800; letter-spacing: -.03em; }
+    .metric .hint { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .chart-wrap { height: 300px; position: relative; }
+    .table-wrap { overflow: auto; max-height: 440px; border: 1px solid var(--line); border-radius: 9px; }
+    table { width: 100%; border-collapse: collapse; min-width: 520px; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    tr:last-child td { border-bottom: 0; }
+    .num { text-align: right; white-space: nowrap; }
+    .risk { color: var(--red); font-weight: 800; }
+    .good { color: var(--green); font-weight: 800; }
+    .report { background: #fbfdff; border: 1px solid #cbd5e1; border-radius: 9px; padding: 16px; white-space: pre-wrap; min-height: 220px; }
+    .empty { color: var(--muted); padding: 30px 12px; text-align: center; }
+    .footer-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+    body:not(.authenticated) .shell { display: none; }
+    .login-screen { min-height: 100vh; display: grid; place-items: center; padding: 20px; background: radial-gradient(circle at top, #dbeafe, #f4f7fb 52%); }
+    body.authenticated .login-screen { display: none; }
+    .login-card { width: min(100%, 410px); background: white; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 28px; }
+    .login-card h1 { font-size: 25px; }
+    .login-form { display: grid; gap: 12px; margin-top: 22px; }
+    .login-form input { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; font: inherit; }
+    .login-error { min-height: 20px; color: var(--red); font-size: 12px; font-weight: 700; }
+    @media (max-width: 1000px) {
+      .metric { grid-column: span 4; }
+      .controls { grid-template-columns: repeat(2, 1fr); }
+      .hero, .upload { flex-direction: column; }
+      .actions { justify-content: flex-start; }
+    }
+    @media (max-width: 650px) {
+      .shell { padding: 16px; }
+      .metric, .span-4, .span-6, .span-8 { grid-column: span 12; }
+      .controls { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <section class="login-screen" aria-label="Acceso restringido">
+    <div class="login-card">
+      <span class="badge">Acceso restringido</span>
+      <h1>Analizador de encuestas</h1>
+      <p class="muted">Ingresa la contraseña para acceder al consolidado y a los informes.</p>
+      <form id="loginForm" class="login-form">
+        <label for="password">Contraseña
+          <input id="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button class="primary" type="submit">Ingresar</button>
+        <div id="loginError" class="login-error" role="alert"></div>
+      </form>
+    </div>
+  </section>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <span class="badge">Analizador institucional</span>
+        <h1>Encuestas de satisfacción</h1>
+        <p class="muted">Mesa de Servicios · Alcaldía de Itagüí</p>
+      </div>
+      <div class="actions">
+        <label class="file-label" for="file">Cargar consolidado Excel</label>
+        <input id="file" type="file" accept=".xlsx,.xls,.csv">
+        <button id="export" class="secondary" disabled>Descargar análisis TXT</button>
+      </div>
+    </header>
+
+    <section class="panel upload">
+      <div class="upload-info">
+        <div class="upload-icon">↥</div>
+        <div>
+          <strong id="fileName">Ningún archivo cargado</strong>
+          <p id="fileMeta" class="muted">Carga una base Excel para iniciar la validación y el análisis.</p>
+        </div>
+      </div>
+      <div id="status" class="status">La información se procesa localmente en este navegador.</div>
+    </section>
+
+    <section class="panel controls">
+      <label>Periodo
+        <select id="period">
+          <option value="all">Todos los registros</option>
+          <option value="month">Mes específico</option>
+          <option value="quarter">Trimestre</option>
+        </select>
+      </label>
+      <label>Mes
+        <select id="month" disabled><option value="all">Todos</option></select>
+      </label>
+      <label>Trimestre
+        <select id="quarter" disabled>
+          <option value="all">Todos</option>
+          <option value="1">Primer trimestre</option>
+          <option value="2">Segundo trimestre</option>
+          <option value="3">Tercer trimestre</option>
+          <option value="4">Cuarto trimestre</option>
+        </select>
+      </label>
+      <label>Dependencia
+        <select id="dependency"><option value="all">Todas</option></select>
+      </label>
+    </section>
+
+    <section class="grid">
+      <article class="panel metric"><div class="label">Encuestas analizadas</div><div id="mTotal" class="value">—</div><div class="hint">Registros válidos del filtro</div></article>
+      <article class="panel metric"><div class="label">Promedio general</div><div id="mAverage" class="value">—</div><div class="hint">Escala de 1,00 a 5,00</div></article>
+      <article class="panel metric"><div class="label">Promedio inferior a 5,00</div><div id="mBelow" class="value">—</div><div class="hint">Casos para seguimiento</div></article>
+      <article class="panel metric"><div class="label">Participación Miguel Ángel</div><div id="mMiguel" class="value">—</div><div class="hint">Identificada en observaciones</div></article>
+      <article class="panel metric"><div class="label">Servicio principal</div><div id="mService" class="value" style="font-size:18px">—</div><div id="mServiceHint" class="hint"></div></article>
+      <article class="panel metric"><div class="label">Dependencia principal</div><div id="mDependency" class="value" style="font-size:18px">—</div><div id="mDependencyHint" class="hint"></div></article>
+    </section>
+
+    <section class="grid">
+      <article class="panel span-6"><h2>Distribución por servicio</h2><p class="muted">Cantidad y participación del periodo seleccionado.</p><div class="chart-wrap"><canvas id="serviceChart"></canvas></div></article>
+      <article class="panel span-6"><h2>Distribución por dependencia</h2><p class="muted">Principales dependencias por número de encuestas.</p><div class="chart-wrap"><canvas id="dependencyChart"></canvas></div></article>
+      <article class="panel span-8"><h2>Tendencia mensual</h2><p class="muted">La vista mensual permite identificar crecimiento, disminución o estabilidad.</p><div class="chart-wrap"><canvas id="monthlyChart"></canvas></div></article>
+      <article class="panel span-4"><h2>Calificaciones por criterio</h2><p class="muted">Promedio de cada pregunta evaluada.</p><div class="chart-wrap"><canvas id="criteriaChart"></canvas></div></article>
+    </section>
+
+    <section class="grid">
+      <article class="panel span-6"><h2>Resumen por servicio</h2><div id="serviceTable" class="table-wrap"></div></article>
+      <article class="panel span-6"><h2>Resumen por dependencia</h2><div id="dependencyTable" class="table-wrap"></div></article>
+      <article class="panel span-12"><h2>Casos atípicos y oportunidades de mejora</h2><p class="muted">Registros con promedio inferior a 5,00, ordenados desde la menor calificación.</p><div id="casesTable" class="table-wrap"></div></article>
+      <article class="panel span-12"><h2>Control de calidad de la información</h2><p class="muted">Validaciones automáticas que deben quedar documentadas antes de aprobar el informe.</p><div id="qualityTable" class="table-wrap"></div></article>
+      <article class="panel span-12"><h2>Borrador de análisis ejecutivo</h2><div id="report" class="report">Carga un consolidado para generar el análisis.</div><p class="footer-note">El borrador debe ser revisado contra la base y el contexto institucional antes de incorporarlo a un informe oficial.</p></article>
+    </section>
+  </main>
+
+  <script>
+    // Cambia únicamente este valor para definir la contraseña de acceso.
+    const APP_PASSWORD = 'ANGEL';
+    const authenticated = sessionStorage.getItem('survey-analyzer-authenticated') === 'true';
+    if (authenticated) document.body.classList.add('authenticated');
+    const get = id => document.getElementById(id);
+    get('loginForm').addEventListener('submit', event => {
+      event.preventDefault();
+      const password = get('password').value;
+      if (password === APP_PASSWORD) {
+        sessionStorage.setItem('survey-analyzer-authenticated', 'true');
+        document.body.classList.add('authenticated');
+        get('password').value = '';
+        get('loginError').textContent = '';
+      } else {
+        get('loginError').textContent = 'Contraseña incorrecta.';
+        get('password').select();
+      }
+    });
+
+    const state = { rows: [], filtered: [], charts: {}, fileName: '' };
+    const $ = id => document.getElementById(id);
+    const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const norm = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const number = value => {
+      if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+      const n = Number(String(value ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    };
+    const money = value => new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 }).format(value);
+    const pct = value => `${(value * 100).toFixed(1).replace('.', ',')} %`;
+    const avg = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+    const esc = text => String(text ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    const ratingFields = [
+      { key: 'solution', label: 'Solución o respuesta al requerimiento' },
+      { key: 'timeliness', label: 'Oportunidad del servicio' },
+      { key: 'attitude', label: 'Actitud y disposición del personal' },
+      { key: 'clarity', label: 'Claridad en las indicaciones' }
+    ];
+    const aliases = {
+      service: ['Servicio evaluado'],
+      dependency: ['Unidad Administrativa'],
+      name: ['Nombre2', 'Nombre'],
+      start: ['Hora de inicio'],
+      suggestion: ['Sugerencias y/o recomendaciones'],
+      solution: ['¿Se dio solución o respuesta a sus requerimientos?'],
+      timeliness: ['¿Los servicios fueron prestados de manera oportuna?'],
+      attitude: ['¿Cómo califica la actitud y disposición del personal que atendió sus requerimientos?'],
+      clarity: ['¿Las indicaciones del personal que atendió sus requerimientos fueron claras?']
+    };
+
+    function findKey(headers, possible) {
+      const wanted = possible.map(norm);
+      return headers.find(h => wanted.includes(norm(h))) || headers.find(h => wanted.some(w => norm(h).includes(w)));
+    }
+    function parseDate(value) {
+      if (value instanceof Date && !isNaN(value)) return value;
+      const d = new Date(value);
+      return isNaN(d) ? null : d;
+    }
+    function mapRows(raw) {
+      const headers = raw.length ? raw[0].map(clean) : [];
+      const keys = {};
+      for (const [semantic, options] of Object.entries(aliases)) keys[semantic] = findKey(headers, options);
+      if (!keys.service || !keys.dependency || !keys.start) throw new Error('No se encontraron las columnas mínimas de servicio, dependencia y fecha.');
+      return raw.slice(1).map((cells, index) => {
+        const obj = Object.fromEntries(headers.map((h, i) => [h, cells[i]]));
+        const date = parseDate(obj[keys.start]);
+        const ratings = {};
+        for (const item of ratingFields) ratings[item.key] = number(obj[keys[item.key]]);
+        const suggestion = clean(obj[keys.suggestion]);
+        const finalAverage = avg(Object.values(ratings).filter(v => v !== null));
+        return {
+          row: index + 2,
+          id: obj.ID ?? obj.Id ?? index + 1,
+          service: clean(obj[keys.service]),
+          dependency: clean(obj[keys.dependency]),
+          respondent: clean(obj[keys.name]),
+          suggestion,
+          date,
+          month: date ? date.getMonth() + 1 : null,
+          year: date ? date.getFullYear() : null,
+          ratings,
+          average: finalAverage,
+          miguel: /miguel\s*[aá]ngel\s*correa|acompa[nñ]ada por miguel/i.test(suggestion)
+        };
+      }).filter(r => r.service || r.dependency || r.date);
+    }
+    function options() {
+      const months = [...new Set(state.rows.map(r => r.month).filter(Boolean))].sort((a,b) => a-b);
+      $('month').innerHTML = '<option value="all">Todos</option>' + months.map(m => `<option value="${m}">${new Date(2020, m-1, 1).toLocaleString('es-CO', {month:'long'})}</option>`).join('');
+      const deps = [...new Set(state.rows.map(r => r.dependency).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'));
+      $('dependency').innerHTML = '<option value="all">Todas</option>' + deps.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
+    }
+    function applyFilter() {
+      const mode = $('period').value;
+      const month = $('month').value;
+      const quarter = $('quarter').value;
+      const dependency = $('dependency').value;
+      state.filtered = state.rows.filter(r => {
+        const periodOk = mode === 'all' || (mode === 'month' && (month === 'all' || String(r.month) === month)) || (mode === 'quarter' && (quarter === 'all' || String(Math.ceil(r.month / 3)) === quarter));
+        return periodOk && (dependency === 'all' || r.dependency === dependency);
+      });
+      render();
+    }
+    function group(rows, field) {
+      const map = new Map();
+      rows.forEach(r => {
+        const key = r[field] || 'Sin dato';
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(r);
+      });
+      return [...map.entries()].map(([key, values]) => ({ key, values, count: values.length, average: avg(values.map(v => v.average)), miguel: values.filter(v => v.miguel).length })).sort((a,b) => b.count - a.count);
+    }
+    function destroyChart(key) { if (state.charts[key]) state.charts[key].destroy(); }
+    function chart(key, canvas, config) { destroyChart(key); state.charts[key] = new Chart($(canvas), config); }
+    function baseScales() { return { x: { grid: { display: false } }, y: { beginAtZero: true, grid: { color: '#e2e8f0' } } }; }
+    function render() {
+      const rows = state.filtered;
+      const total = rows.length;
+      const overall = avg(rows.map(r => r.average));
+      const below = rows.filter(r => r.average < 5).sort((a,b) => a.average - b.average);
+      const miguel = rows.filter(r => r.miguel).length;
+      const services = group(rows, 'service');
+      const deps = group(rows, 'dependency');
+      $('mTotal').textContent = total.toLocaleString('es-CO');
+      $('mAverage').textContent = total ? overall.toFixed(2).replace('.', ',') : '—';
+      $('mBelow').textContent = total ? `${below.length} (${pct(below.length / total)})` : '—';
+      $('mMiguel').textContent = total ? `${miguel} (${pct(miguel / total)})` : '—';
+      $('mService').textContent = services[0]?.key || '—';
+      $('mServiceHint').textContent = services[0] ? `${services[0].count} encuestas · ${pct(services[0].count / total)}` : '';
+      $('mDependency').textContent = deps[0]?.key || '—';
+      $('mDependencyHint').textContent = deps[0] ? `${deps[0].count} encuestas · ${pct(deps[0].count / total)}` : '';
+      renderCharts(rows, services, deps);
+      renderTables(rows, services, deps, below);
+      renderQuality(rows);
+      $('report').textContent = buildReport(rows, services, deps, below, miguel);
+      $('export').disabled = !total;
+    }
+    function renderQuality(rows) {
+      const ids = rows.map(r => String(r.id)).filter(Boolean);
+      const duplicateIds = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+      const missing = {
+        'Fecha de inicio': rows.filter(r => !r.date).length,
+        'Servicio evaluado': rows.filter(r => !r.service).length,
+        'Dependencia': rows.filter(r => !r.dependency).length,
+        'Criterios incompletos': rows.filter(r => Object.values(r.ratings).some(v => v === null)).length
+      };
+      const rowsHtml = [
+        ['Registros analizados', rows.length, 'OK'],
+        ['Participación por servicio', `${group(rows, 'service').reduce((a, b) => a + b.count, 0)}/${rows.length}`, '100 %'],
+        ['Participación por dependencia', `${group(rows, 'dependency').reduce((a, b) => a + b.count, 0)}/${rows.length}`, '100 %'],
+        ['IDs duplicados', duplicateIds.length, duplicateIds.length ? `Revisar: ${duplicateIds.slice(0, 8).join(', ')}` : 'No detectados'],
+        ...Object.entries(missing).map(([label, count]) => [label, count, count ? 'Revisar' : 'OK'])
+      ];
+      $('qualityTable').innerHTML = `<table><thead><tr><th>Validación</th><th class="num">Resultado</th><th>Estado</th></tr></thead><tbody>${rowsHtml.map(row => `<tr><td>${esc(row[0])}</td><td class="num">${esc(row[1])}</td><td class="${String(row[2]).startsWith('OK') || row[2] === '100 %' || row[2] === 'No detectados' ? 'good' : 'risk'}">${esc(row[2])}</td></tr>`).join('')}</tbody></table>`;
+    }
+    function renderCharts(rows, services, deps) {
+      chart('service', 'serviceChart', { type: 'doughnut', data: { labels: services.map(x => x.key), datasets: [{ data: services.map(x => x.count), backgroundColor: ['#2563eb','#0f766e','#f59e0b','#9333ea','#ef4444','#64748b'] }] }, options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } } });
+      const topDeps = deps.slice(0, 10).reverse();
+      chart('dependency', 'dependencyChart', { type: 'bar', data: { labels: topDeps.map(x => x.key), datasets: [{ label: 'Encuestas', data: topDeps.map(x => x.count), backgroundColor: '#0f766e', borderRadius: 5 }] }, options: { maintainAspectRatio: false, indexAxis: 'y', scales: baseScales(), plugins: { legend: { display: false } } } });
+      const months = [...new Set(rows.map(r => r.month).filter(Boolean))].sort((a,b) => a-b);
+      const monthly = months.map(m => rows.filter(r => r.month === m).length);
+      chart('monthly', 'monthlyChart', { type: 'line', data: { labels: months.map(m => new Date(2020,m-1,1).toLocaleString('es-CO',{month:'short'})), datasets: [{ label: 'Encuestas', data: monthly, borderColor: '#2563eb', backgroundColor: '#dbeafe', fill: true, tension: .3 }] }, options: { maintainAspectRatio: false, scales: baseScales() } });
+      const criteria = ratingFields.map(item => avg(rows.map(r => r.ratings[item.key]).filter(v => v !== null)));
+      chart('criteria', 'criteriaChart', { type: 'bar', data: { labels: ['Solución','Oportunidad','Actitud','Claridad'], datasets: [{ label: 'Promedio', data: criteria, backgroundColor: ['#2563eb','#0f766e','#f59e0b','#9333ea'], borderRadius: 5 }] }, options: { maintainAspectRatio: false, scales: { x: { grid: { display: false } }, y: { min: 0, max: 5, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } } });
+    }
+    function renderTables(rows, services, deps, below) {
+      $('serviceTable').innerHTML = services.length ? `<table><thead><tr><th>Servicio</th><th class="num">Encuestas</th><th class="num">Participación</th><th class="num">Promedio</th><th class="num">Miguel Ángel</th></tr></thead><tbody>${services.map(x => `<tr><td>${esc(x.key)}</td><td class="num">${x.count}</td><td class="num">${pct(x.count / rows.length)}</td><td class="num">${x.average.toFixed(2)}</td><td class="num">${x.miguel} (${pct(x.miguel / x.count)})</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No hay datos para el filtro seleccionado.</div>';
+      $('dependencyTable').innerHTML = deps.length ? `<table><thead><tr><th>Dependencia</th><th class="num">Encuestas</th><th class="num">Participación</th><th class="num">Promedio</th></tr></thead><tbody>${deps.map(x => `<tr><td>${esc(x.key)}</td><td class="num">${x.count}</td><td class="num">${pct(x.count / rows.length)}</td><td class="num">${x.average.toFixed(2)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No hay datos para el filtro seleccionado.</div>';
+      $('casesTable').innerHTML = below.length ? `<table><thead><tr><th>ID / fila</th><th>Fecha</th><th>Dependencia</th><th>Servicio</th><th class="num">Promedio</th><th>Observación</th></tr></thead><tbody>${below.map(r => `<tr><td>${esc(r.id)} / ${r.row}</td><td>${r.date ? r.date.toLocaleDateString('es-CO') : 'Sin fecha'}</td><td>${esc(r.dependency)}</td><td>${esc(r.service)}</td><td class="num ${r.average <= 3 ? 'risk' : ''}">${r.average.toFixed(2)}</td><td>${esc(r.suggestion || 'Sin observación')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No se identifican calificaciones inferiores a 5,00.</div>';
+    }
+    function buildReport(rows, services, deps, below, miguel) {
+      if (!rows.length) return 'No hay registros para el filtro seleccionado.';
+      const total = rows.length;
+      const overall = avg(rows.map(r => r.average));
+      const criteria = ratingFields.map(item => ({ label: item.label, value: avg(rows.map(r => r.ratings[item.key]).filter(v => v !== null)) }));
+      const min = [...criteria].sort((a,b) => a.value - b.value)[0];
+      const max = [...criteria].sort((a,b) => b.value - a.value)[0];
+      const lowNames = below.slice(0, 3).map(r => `${r.id} (${r.average.toFixed(2)})`).join(', ') || 'ninguno';
+      return `ANÁLISIS EJECUTIVO\n\nSe analizaron ${total.toLocaleString('es-CO')} encuestas de satisfacción del periodo seleccionado. La calificación promedio general fue de ${overall.toFixed(2).replace('.', ',')} sobre 5,00. ${below.length ? `Se identificaron ${below.length} encuestas con promedio inferior a 5,00 (${pct(below.length / total)}), que requieren revisión puntual.` : 'No se identificaron encuestas con promedio inferior a 5,00.'}\n\nLa mayor participación correspondió al servicio ${services[0].key}, con ${services[0].count} encuestas (${pct(services[0].count / total)}). La dependencia con mayor participación fue ${deps[0].key}, con ${deps[0].count} encuestas (${pct(deps[0].count / total)}).\n\nPor criterio, el promedio más bajo fue ${min.label} (${min.value.toFixed(2)}) y el más alto fue ${max.label} (${max.value.toFixed(2)}). Se identificaron ${miguel} encuestas asociadas al acompañamiento de Miguel Ángel Correa (${pct(miguel / total)}).\n\nLos casos con menor valoración fueron: ${lowNames}. Se recomienda verificar la solución efectiva antes del cierre, fortalecer la comunicación con el usuario y documentar las causas de los casos inferiores para determinar si corresponden a situaciones aisladas o repetitivas.\n\nVALIDACIONES AUTOMÁTICAS\n• Participación por servicio: ${services.reduce((a,b) => a + b.count, 0) === total ? '100 %' : 'Revisar'}.\n• Participación por dependencia: ${deps.reduce((a,b) => a + b.count, 0) === total ? '100 %' : 'Revisar'}.\n• Promedio general: calculado como promedio de los promedios individuales disponibles.\n• La identificación de Miguel Ángel se basa en el texto de observaciones; debe confirmarse contra la regla institucional de marcación.`;
+    }
+    function toggleControls() {
+      const mode = $('period').value;
+      $('month').disabled = mode !== 'month';
+      $('quarter').disabled = mode !== 'quarter';
+    }
+    $('file').addEventListener('change', event => {
+      const file = event.target.files[0];
+      if (!file) return;
+      state.fileName = file.name;
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const workbook = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          state.rows = mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }));
+          options();
+          $('fileName').textContent = file.name;
+          $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros detectados · hoja: ${workbook.SheetNames[0]}`;
+          $('status').className = 'status';
+          $('status').textContent = 'Archivo cargado y validado localmente.';
+          applyFilter();
+        } catch (error) {
+          $('status').className = 'status error';
+          $('status').textContent = error.message || 'No fue posible leer el archivo.';
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+    $('period').addEventListener('change', () => { toggleControls(); applyFilter(); });
+    $('month').addEventListener('change', applyFilter);
+    $('quarter').addEventListener('change', applyFilter);
+    $('dependency').addEventListener('change', applyFilter);
+    $('export').addEventListener('click', () => {
+      const content = $('report').textContent.trim();
+      if (!content) return;
+      const blob = new Blob(['\ufeff', content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'analisis-encuestas.txt';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Keep the object URL alive long enough for browsers to start the download.
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  </script>
+</body>
+</html>
