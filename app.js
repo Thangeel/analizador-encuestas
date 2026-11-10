@@ -100,7 +100,34 @@
         const periodOk = mode === 'all' || (mode === 'month' && (month === 'all' || String(r.month) === month)) || (mode === 'quarter' && (quarter === 'all' || String(Math.ceil(r.month / 3)) === quarter));
         return periodOk && (dependency === 'all' || r.dependency === dependency);
       });
+      updatePeriodLabel();
       render();
+    }
+    function updatePeriodLabel() {
+      const mode = $('period').value;
+      const month = $('month').value;
+      const quarter = $('quarter').value;
+      const dependency = $('dependency').value;
+      let label = 'Todos los registros';
+      if (mode === 'month' && month !== 'all') {
+        const monthName = new Date(2020, Number(month) - 1, 1).toLocaleString('es-CO', { month: 'long' });
+        const years = [...new Set(state.filtered.map(row => row.year).filter(Boolean))].sort();
+        label = `${monthName}${years.length === 1 ? ` de ${years[0]}` : ''}`;
+      } else if (mode === 'quarter' && quarter !== 'all') {
+        const quarterNames = {
+          1: 'Primer trimestre',
+          2: 'Segundo trimestre',
+          3: 'Tercer trimestre',
+          4: 'Cuarto trimestre'
+        };
+        label = quarterNames[quarter];
+      } else if (mode === 'month') {
+        label = 'Todos los meses';
+      } else if (mode === 'quarter') {
+        label = 'Todos los trimestres';
+      }
+      if (dependency !== 'all') label += ` · Dependencia: ${dependency}`;
+      $('periodLabel').textContent = `Periodo analizado: ${label}`;
     }
     function group(rows, field) {
       const map = new Map();
@@ -177,7 +204,8 @@
       const min = [...criteria].sort((a,b) => a.value - b.value)[0];
       const max = [...criteria].sort((a,b) => b.value - a.value)[0];
       const lowNames = below.slice(0, 3).map(r => `${r.id} (${r.average.toFixed(2)})`).join(', ') || 'ninguno';
-      return `ANÁLISIS EJECUTIVO\n\nSe analizaron ${total.toLocaleString('es-CO')} encuestas de satisfacción del periodo seleccionado. La calificación promedio general fue de ${overall.toFixed(2).replace('.', ',')} sobre 5,00. ${below.length ? `Se identificaron ${below.length} encuestas con promedio inferior a 5,00 (${pct(below.length / total)}), que requieren revisión puntual.` : 'No se identificaron encuestas con promedio inferior a 5,00.'}\n\nLa mayor participación correspondió al servicio ${services[0].key}, con ${services[0].count} encuestas (${pct(services[0].count / total)}). La dependencia con mayor participación fue ${deps[0].key}, con ${deps[0].count} encuestas (${pct(deps[0].count / total)}).\n\nPor criterio, el promedio más bajo fue ${min.label} (${min.value.toFixed(2)}) y el más alto fue ${max.label} (${max.value.toFixed(2)}). Se identificaron ${miguel} encuestas asociadas al acompañamiento de Miguel Ángel Correa (${pct(miguel / total)}).\n\nLos casos con menor valoración fueron: ${lowNames}. Se recomienda verificar la solución efectiva antes del cierre, fortalecer la comunicación con el usuario y documentar las causas de los casos inferiores para determinar si corresponden a situaciones aisladas o repetitivas.\n\nVALIDACIONES AUTOMÁTICAS\n• Participación por servicio: ${services.reduce((a,b) => a + b.count, 0) === total ? '100 %' : 'Revisar'}.\n• Participación por dependencia: ${deps.reduce((a,b) => a + b.count, 0) === total ? '100 %' : 'Revisar'}.\n• Promedio general: calculado como promedio de los promedios individuales disponibles.\n• La identificación de Miguel Ángel se basa en el texto de observaciones; debe confirmarse contra la regla institucional de marcación.`;
+      const periodLabel = $('periodLabel').textContent.replace('Periodo analizado: ', '');
+      return `ANÁLISIS EJECUTIVO\n\nPeriodo analizado: ${periodLabel}.\n\nSe analizaron ${total.toLocaleString('es-CO')} encuestas de satisfacción. La calificación promedio general fue de ${overall.toFixed(2).replace('.', ',')} sobre 5,00. ${below.length ? `Se identificaron ${below.length} encuestas con promedio inferior a 5,00 (${pct(below.length / total)}), que requieren revisión puntual.` : 'No se identificaron encuestas con promedio inferior a 5,00.'}\n\nLa mayor participación correspondió al servicio ${services[0].key}, con ${services[0].count} encuestas (${pct(services[0].count / total)}). La dependencia con mayor participación fue ${deps[0].key}, con ${deps[0].count} encuestas (${pct(deps[0].count / total)}).\n\nPor criterio, el promedio más bajo fue ${min.label} (${min.value.toFixed(2)}) y el más alto fue ${max.label} (${max.value.toFixed(2)}). Se identificaron ${miguel} encuestas asociadas al acompañamiento de Miguel Ángel Correa (${pct(miguel / total)}).\n\nLos casos con menor valoración fueron: ${lowNames}. Se recomienda verificar la solución efectiva antes del cierre, fortalecer la comunicación con el usuario y documentar las causas de los casos inferiores para determinar si corresponden a situaciones aisladas o repetitivas.\n\nVALIDACIONES AUTOMÁTICAS\n• Participación por servicio: ${services.reduce((a,b) => a + b.count, 0) === total ? '100 %' : 'Revisar'}.\n• Participación por dependencia: ${deps.reduce((a,b) => a + b.count, 0) === total ? '100 %' : 'Revisar'}.\n• Promedio general: calculado como promedio de los promedios individuales disponibles.\n• La identificación de Miguel Ángel se basa en el texto de observaciones; debe confirmarse contra la regla institucional de marcación.`;
     }
     function toggleControls() {
       const mode = $('period').value;
