@@ -1,5 +1,5 @@
 // Cambia únicamente este valor para definir la contraseña de acceso.
-    const APP_PASSWORD = 'ANGEL';
+    const APP_PASSWORD = 'CANO';
     const authenticated = sessionStorage.getItem('survey-analyzer-authenticated') === 'true';
     if (authenticated) document.body.classList.add('authenticated');
     const get = id => document.getElementById(id);
