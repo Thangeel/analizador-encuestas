@@ -17,7 +17,7 @@
       }
     });
 
-    const state = { rows: [], filtered: [], charts: {}, fileName: '', sheetName: '' };
+    const state = { rows: [], filtered: [], previousRows: [], charts: {}, fileName: '', previousFileName: '', sheetName: '', previousSheetName: '' };
     const $ = id => document.getElementById(id);
     const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
     const norm = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -54,6 +54,11 @@
     }
     function parseDate(value) {
       if (value instanceof Date && !isNaN(value)) return value;
+      const text = clean(value);
+      const isoDate = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (isoDate) return new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]));
+      const localDate = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+      if (localDate) return new Date(Number(localDate[3]), Number(localDate[2]) - 1, Number(localDate[1]));
       const d = new Date(value);
       return isNaN(d) ? null : d;
     }
@@ -84,6 +89,15 @@
           miguel: /miguel\s*[aá]ngel\s*correa|acompa[nñ]ada por miguel/i.test(suggestion)
         };
       }).filter(r => r.service || r.dependency || r.date);
+    }
+    function parseWorkbook(buffer) {
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      return {
+        rows: mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true })),
+        sheetName
+      };
     }
     function options() {
       const months = [...new Set(state.rows.map(r => r.month).filter(Boolean))].sort((a,b) => a-b);
@@ -219,12 +233,11 @@
       const reader = new FileReader();
       reader.onload = e => {
         try {
-          const workbook = XLSX.read(e.target.result, { type: 'array', cellDates: true });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          state.rows = mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }));
+          const parsed = parseWorkbook(e.target.result);
+          state.rows = parsed.rows;
+          state.sheetName = parsed.sheetName;
           options();
           $('fileName').textContent = file.name;
-          state.sheetName = workbook.SheetNames[0];
           $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros detectados · hoja: ${state.sheetName}`;
           $('status').className = 'status';
           $('status').textContent = 'Archivo cargado y validado localmente.';
@@ -232,6 +245,26 @@
         } catch (error) {
           $('status').className = 'status error';
           $('status').textContent = error.message || 'No fue posible leer el archivo.';
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+    $('previousFile').addEventListener('change', event => {
+      const file = event.target.files[0];
+      if (!file) return;
+      state.previousFileName = file.name;
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const parsed = parseWorkbook(e.target.result);
+          state.previousRows = parsed.rows;
+          state.previousSheetName = parsed.sheetName;
+          $('status').className = 'status';
+          $('status').textContent = `Periodo anterior cargado: ${state.previousRows.length.toLocaleString('es-CO')} registros.`;
+        } catch (error) {
+          state.previousRows = [];
+          $('status').className = 'status error';
+          $('status').textContent = error.message || 'No fue posible leer el periodo anterior.';
         }
       };
       reader.readAsArrayBuffer(file);
@@ -252,63 +285,130 @@
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
-    function reportSnapshot() {
-      const rows = state.filtered;
+    function monthYearLabel(rows) {
+      const dates = rows.map(row => row.date).filter(Boolean);
+      if (!dates.length) return $('periodLabel').textContent.replace('Periodo analizado: ', '').toUpperCase();
+      const first = dates.slice().sort((a, b) => a - b)[0];
+      const last = dates.slice().sort((a, b) => b - a)[0];
+      const firstLabel = first.toLocaleString('es-CO', { month: 'long', year: 'numeric' });
+      const lastLabel = last.toLocaleString('es-CO', { month: 'long', year: 'numeric' });
+      return firstLabel === lastLabel ? firstLabel.toUpperCase() : `${firstLabel} - ${lastLabel}`.toUpperCase();
+    }
+
+    function metrics(rows) {
       const services = group(rows, 'service');
       const deps = group(rows, 'dependency');
-      const below = rows.filter(r => r.average < 5).sort((a,b) => a.average - b.average);
-      const miguel = rows.filter(r => r.miguel).length;
+      const below = rows.filter(row => row.average < 5).sort((a, b) => a.average - b.average);
+      const criteria = ratingFields.map(item => ({
+        key: item.key,
+        label: item.label,
+        shortLabel: { solution: 'Solución', timeliness: 'Oportunidad', attitude: 'Actitud', clarity: 'Claridad' }[item.key],
+        average: avg(rows.map(row => row.ratings[item.key]).filter(value => value !== null))
+      }));
+      const serviceNames = [...new Set(rows.map(row => row.service).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+      const matrix = [...new Set(rows.map(row => row.dependency).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es')).map(dependency => ({
+        dependency,
+        values: serviceNames.map(service => rows.filter(row => row.dependency === dependency && row.service === service).length),
+        total: rows.filter(row => row.dependency === dependency).length
+      }));
+      return {
+        rows,
+        total: rows.length,
+        average: avg(rows.map(row => row.average)),
+        below,
+        perfect: rows.filter(row => row.average === 5).length,
+        miguel: rows.filter(row => row.miguel).length,
+        services,
+        deps,
+        criteria,
+        serviceNames,
+        matrix,
+        quality: {
+          analyzed: rows.length,
+          missingDate: rows.filter(row => !row.date).length,
+          missingService: rows.filter(row => !row.service).length,
+          missingDependency: rows.filter(row => !row.dependency).length,
+          incompleteCriteria: rows.filter(row => Object.values(row.ratings).some(value => value === null)).length,
+          duplicateIds: [...new Set(rows.map(row => String(row.id)).filter((id, index, list) => list.indexOf(id) !== index))]
+        }
+      };
+    }
+
+    function comparison(current, previous) {
+      if (!previous.length) return null;
+      const currentMetrics = metrics(current);
+      const previousMetrics = metrics(previous);
+      const currentService = currentMetrics.services[0];
+      const previousService = previousMetrics.services[0];
+      const currentDependency = currentMetrics.deps[0];
+      const previousDependency = previousMetrics.deps[0];
+      return {
+        previousPeriod: monthYearLabel(previous),
+        total: { current: currentMetrics.total, previous: previousMetrics.total, difference: currentMetrics.total - previousMetrics.total },
+        average: { current: currentMetrics.average, previous: previousMetrics.average, difference: currentMetrics.average - previousMetrics.average },
+        belowFive: { current: currentMetrics.below.length, previous: previousMetrics.below.length, difference: currentMetrics.below.length - previousMetrics.below.length },
+        dependency: { current: currentDependency?.key || 'Sin dato', currentCount: currentDependency?.count || 0, previous: previousDependency?.key || 'Sin dato', previousCount: previousDependency?.count || 0 },
+        service: { current: currentService?.key || 'Sin dato', currentCount: currentService?.count || 0, previous: previousService?.key || 'Sin dato', previousCount: previousService?.count || 0 }
+      };
+    }
+
+    function caseAnalysis(row) {
+      const lowest = ratingFields
+        .filter(item => row.ratings[item.key] !== null)
+        .sort((a, b) => row.ratings[a.key] - row.ratings[b.key]);
+      const lowestLabels = lowest.filter(item => row.ratings[item.key] === row.ratings[lowest[0]?.key]).map(item => item.label.toLowerCase());
+      const observation = row.suggestion ? ` La observación registrada indica: “${row.suggestion}”.` : '';
+      return `El registro ${row.id}, correspondiente a ${row.dependency || 'una dependencia no identificada'}, obtuvo un promedio de ${row.average.toFixed(2)}. ${lowestLabels.length ? `La principal oportunidad se relaciona con ${lowestLabels.join(' y ')}.` : ''}${observation}`;
+    }
+
+    function reportNarratives(current, previous) {
+      const data = metrics(current);
+      const comparisonData = comparison(current, previous);
+      const strongestCriteria = data.criteria.filter(item => item.average >= 4.99).map(item => item.shortLabel.toLowerCase());
+      const lowestCriterion = data.criteria.slice().sort((a, b) => a.average - b.average)[0];
+      const strengths = [
+        `Se analizaron ${data.total.toLocaleString('es-CO')} encuestas con una calificación promedio general de ${data.average.toFixed(2).replace('.', ',')} sobre 5,00.`,
+        `${data.perfect.toLocaleString('es-CO')} encuestas (${data.total ? pct(data.perfect / data.total) : '0,0 %'}) obtuvieron un promedio individual de 5,00.`,
+        `El servicio con mayor participación fue ${data.services[0]?.key || 'Sin dato'}, con ${data.services[0]?.count || 0} encuestas (${data.total ? pct((data.services[0]?.count || 0) / data.total) : '0,0 %'}).`,
+        strongestCriteria.length ? `Los criterios con resultados máximos o prácticamente máximos fueron: ${strongestCriteria.join(', ')}.` : `Los cuatro criterios evaluados presentaron resultados superiores a ${Math.max(0, lowestCriterion.average - 0.02).toFixed(2)}.`
+      ];
+      const opportunities = [
+        data.below.length ? `Se requiere revisar ${data.below.length} encuesta(s) con promedio inferior a 5,00, especialmente el registro ${data.below[0].id}.` : 'No se identificaron casos con promedio inferior a 5,00.',
+        `El criterio con menor promedio fue ${lowestCriterion.label.toLowerCase()} (${lowestCriterion.average.toFixed(2)}).`,
+        'Mantener la verificación de la solución antes del cierre y reforzar la claridad de las indicaciones cuando el usuario requiera acompañamiento adicional.',
+        data.quality.incompleteCriteria ? `Antes de aprobar el informe deben revisarse ${data.quality.incompleteCriteria} registro(s) con criterios incompletos.` : 'No se detectaron criterios incompletos en los registros analizados.'
+      ];
+      if (comparisonData) {
+        opportunities.push(`Frente a ${comparisonData.previousPeriod.toLowerCase()}, el volumen de encuestas varió en ${comparisonData.total.difference > 0 ? 'un aumento' : 'una reducción'} de ${Math.abs(comparisonData.total.difference)} registro(s).`);
+      }
+      const conclusion = `Durante ${monthYearLabel(current).toLowerCase()} se analizaron ${data.total} encuestas de satisfacción, con un promedio general de ${data.average.toFixed(2).replace('.', ',')} sobre 5,00. ${data.below.length ? `Se identificaron ${data.below.length} caso(s) para seguimiento.` : 'No se identificaron casos críticos.'} ${comparisonData ? `En comparación con ${comparisonData.previousPeriod.toLowerCase()}, el promedio ${Math.abs(comparisonData.average.difference) < 0.005 ? 'se mantuvo estable' : comparisonData.average.difference > 0 ? 'mejoró' : 'disminuyó'}.` : ''}`;
+      return { strengths, opportunities, conclusion, cases: data.below.map(caseAnalysis), comparison: comparisonData };
+    }
+
+    function reportSnapshot() {
+      const data = metrics(state.filtered);
+      const narratives = reportNarratives(state.filtered, state.previousRows);
       return {
         metadata: {
           generatedAt: new Date().toISOString(),
           sourceFile: state.fileName,
+          previousFile: state.previousFileName,
           sheet: state.sheetName,
-          filter: {
-            period: $('period').value,
-            month: $('month').value,
-            quarter: $('quarter').value,
-            dependency: $('dependency').value
-          }
+          previousSheet: state.previousSheetName,
+          period: monthYearLabel(state.filtered),
+          filter: { period: $('period').value, month: $('month').value, quarter: $('quarter').value, dependency: $('dependency').value }
         },
-        summary: {
-          total: rows.length,
-          average: avg(rows.map(r => r.average)),
-          belowFive: below.length,
-          miguelAngel: miguel
-        },
-        byService: services.map(x => ({ service: x.key, count: x.count, participation: x.count / rows.length, average: x.average, miguelAngel: x.miguel })),
-        byDependency: deps.map(x => ({ dependency: x.key, count: x.count, participation: x.count / rows.length, average: x.average })),
-        byCriterion: ratingFields.map(item => ({ criterion: item.label, average: avg(rows.map(r => r.ratings[item.key]).filter(v => v !== null)) })),
-        quality: {
-          analyzed: rows.length,
-          missingDate: rows.filter(r => !r.date).length,
-          missingService: rows.filter(r => !r.service).length,
-          missingDependency: rows.filter(r => !r.dependency).length,
-          incompleteCriteria: rows.filter(r => Object.values(r.ratings).some(v => v === null)).length
-        },
-        cases: below.map(r => ({
-          id: r.id,
-          sourceRow: r.row,
-          date: r.date ? r.date.toISOString() : null,
-          dependency: r.dependency,
-          service: r.service,
-          average: r.average,
-          suggestion: r.suggestion
-        })),
-        records: rows.map(r => ({
-          id: r.id,
-          sourceRow: r.row,
-          date: r.date ? r.date.toISOString() : null,
-          year: r.year,
-          month: r.month,
-          service: r.service,
-          dependency: r.dependency,
-          respondent: r.respondent,
-          ratings: r.ratings,
-          average: r.average,
-          miguelAngel: r.miguel,
-          suggestion: r.suggestion
-        }))
+        summary: { total: data.total, average: data.average, belowFive: data.below.length, perfect: data.perfect, miguelAngel: data.miguel },
+        byService: data.services.map(item => ({ service: item.key, count: item.count, participation: item.count / data.total, average: item.average, miguelAngel: item.miguel })),
+        byDependency: data.deps.map(item => ({ dependency: item.key, count: item.count, participation: item.count / data.total, average: item.average })),
+        serviceDependencyMatrix: { services: data.serviceNames, rows: data.matrix },
+        byCriterion: data.criteria.map(item => ({ criterion: item.label, average: item.average })),
+        scoreDistribution: [{ label: '5,00', count: data.perfect, participation: data.perfect / data.total }, { label: 'Inferior a 5,00', count: data.below.length, participation: data.below.length / data.total }],
+        quality: data.quality,
+        cases: data.below.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, dependency: row.dependency, service: row.service, ratings: row.ratings, average: row.average, suggestion: row.suggestion })),
+        narratives,
+        comparison: narratives.comparison,
+        records: state.filtered.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, year: row.year, month: row.month, service: row.service, dependency: row.dependency, respondent: row.respondent, ratings: row.ratings, average: row.average, miguelAngel: row.miguel, suggestion: row.suggestion }))
       };
     }
 
@@ -324,57 +424,93 @@
     $('exportCsv').addEventListener('click', () => {
       const columns = ['id', 'sourceRow', 'date', 'service', 'dependency', 'respondent', 'solution', 'timeliness', 'attitude', 'clarity', 'average', 'miguelAngel', 'suggestion'];
       const lines = [columns.map(csvCell).join(';')];
-      reportSnapshot().records.forEach(record => {
-        lines.push([
-          record.id, record.sourceRow, record.date, record.service, record.dependency, record.respondent,
-          record.ratings.solution, record.ratings.timeliness, record.ratings.attitude, record.ratings.clarity,
-          record.average, record.miguelAngel, record.suggestion
-        ].map(csvCell).join(';'));
-      });
+      reportSnapshot().records.forEach(record => lines.push([
+        record.id, record.sourceRow, record.date, record.service, record.dependency, record.respondent,
+        record.ratings.solution, record.ratings.timeliness, record.ratings.attitude, record.ratings.clarity,
+        record.average, record.miguelAngel, record.suggestion
+      ].map(csvCell).join(';')));
       downloadBlob(new Blob(['\ufeff', lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), 'detalle-encuestas.csv');
     });
 
     $('exportWord').addEventListener('click', async () => {
       const snapshot = reportSnapshot();
       if (!snapshot.records.length || !window.docx) return;
-      const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } = window.docx;
-      const cell = value => new TableCell({ children: [new Paragraph(String(value ?? ''))] });
-      const headerRow = labels => new TableRow({ children: labels.map(label => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: label, bold: true })] })] })) });
-      const serviceRows = snapshot.byService.slice(0, 20).map(item => new TableRow({ children: [cell(item.service), cell(item.count), cell(pct(item.participation)), cell(item.average.toFixed(2))] }));
-      const dependencyRows = snapshot.byDependency.slice(0, 20).map(item => new TableRow({ children: [cell(item.dependency), cell(item.count), cell(pct(item.participation)), cell(item.average.toFixed(2))] }));
-      const caseRows = snapshot.cases.slice(0, 50).map(item => new TableRow({ children: [cell(item.id), cell(item.date ? new Date(item.date).toLocaleDateString('es-CO') : 'Sin fecha'), cell(item.service), cell(item.dependency), cell(item.average.toFixed(2)), cell(item.suggestion || 'Sin observación')] }));
-      const reportText = buildReport(state.filtered, group(state.filtered, 'service'), group(state.filtered, 'dependency'), snapshot.cases.map(item => state.filtered.find(r => String(r.id) === String(item.id))).filter(Boolean), snapshot.summary.miguelAngel);
-      const document = new Document({
-        sections: [{
-          children: [
-            new Paragraph({ text: 'Informe de análisis de encuestas de satisfacción', heading: HeadingLevel.TITLE }),
-            new Paragraph(`Mesa de Servicios · Alcaldía de Itagüí`),
-            new Paragraph(`Fuente: ${state.fileName || 'No especificada'} · Hoja: ${state.sheetName || 'No especificada'}`),
-            new Paragraph(`Generado: ${new Date().toLocaleString('es-CO')}`),
-            new Paragraph({ text: '1. Resumen ejecutivo', heading: HeadingLevel.HEADING_1 }),
-            ...reportText.split('\n\n').filter(Boolean).map(text => new Paragraph(text)),
-            new Paragraph({ text: '2. Indicadores principales', heading: HeadingLevel.HEADING_1 }),
-            new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [
-              headerRow(['Indicador', 'Resultado']),
-              new TableRow({ children: [cell('Encuestas analizadas'), cell(snapshot.summary.total)] }),
-              new TableRow({ children: [cell('Promedio general'), cell(snapshot.summary.average.toFixed(2))] }),
-              new TableRow({ children: [cell('Casos inferiores a 5,00'), cell(snapshot.summary.belowFive)] }),
-              new TableRow({ children: [cell('Casos asociados a Miguel Ángel'), cell(snapshot.summary.miguelAngel)] })
-            ] }),
-            new Paragraph({ text: '3. Resultados por servicio', heading: HeadingLevel.HEADING_1 }),
-            new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow(['Servicio', 'Encuestas', 'Participación', 'Promedio']), ...serviceRows] }),
-            new Paragraph({ text: '4. Resultados por dependencia', heading: HeadingLevel.HEADING_1 }),
-            new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow(['Dependencia', 'Encuestas', 'Participación', 'Promedio']), ...dependencyRows] }),
-            new Paragraph({ text: '5. Criterios evaluados', heading: HeadingLevel.HEADING_1 }),
-            new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow(['Criterio', 'Promedio']), ...snapshot.byCriterion.map(item => new TableRow({ children: [cell(item.criterion), cell(item.average.toFixed(2))] }))] }),
-            new Paragraph({ text: '6. Casos para seguimiento', heading: HeadingLevel.HEADING_1 }),
-            caseRows.length ? new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow(['ID', 'Fecha', 'Servicio', 'Dependencia', 'Promedio', 'Observación']), ...caseRows] }) : new Paragraph('No se identificaron casos con promedio inferior a 5,00.'),
-            new Paragraph({ text: '7. Control de calidad', heading: HeadingLevel.HEADING_1 }),
-            new Paragraph(`Registros analizados: ${snapshot.quality.analyzed}. Fechas faltantes: ${snapshot.quality.missingDate}. Servicios faltantes: ${snapshot.quality.missingService}. Dependencias faltantes: ${snapshot.quality.missingDependency}. Registros con criterios incompletos: ${snapshot.quality.incompleteCriteria}.`),
-            new Paragraph('Este informe es un apoyo para la revisión institucional y debe contrastarse con la base original antes de su aprobación.')
-          ]
-        }]
-      });
+      const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, ImageRun, AlignmentType } = window.docx;
+      const cell = (value, bold = false) => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(value ?? ''), bold, font: 'Arial', size: 18 })] })] });
+      const headerRow = labels => new TableRow({ children: labels.map(label => cell(label, true)) });
+      const table = (headers, rows) => new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow(headers), ...rows.map(row => new TableRow({ children: row.map(value => cell(value)) }))] });
+      const sectionTitle = text => new Paragraph({ text, heading: HeadingLevel.HEADING_1 });
+      const paragraph = text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], spacing: { after: 120 } });
+      const logoBytes = window.ALCALDIA_LOGO_BASE64 ? Uint8Array.from(atob(window.ALCALDIA_LOGO_BASE64), char => char.charCodeAt(0)) : null;
+      const data = metrics(state.filtered);
+      const serviceTableRows = data.services.map(item => [item.key, item.count, pct(item.count / data.total), `${item.average.toFixed(2)} / 5,00`, item.miguel]);
+      serviceTableRows.push(['Total', data.total, '100,0 %', `${data.average.toFixed(2)} / 5,00`, data.miguel]);
+      const dependencyTableRows = data.deps.map(item => [item.key, item.count, pct(item.count / data.total), item.average.toFixed(2)]);
+      dependencyTableRows.push(['Total', data.total, '100,0 %', data.average.toFixed(2)]);
+      const matrixRows = data.matrix.map(row => [row.dependency, ...row.values, row.total]);
+      matrixRows.push(['Total', ...data.serviceNames.map(service => state.filtered.filter(item => item.service === service).length), data.total]);
+      const criteriaRows = data.criteria.map(item => [item.label, `${item.average.toFixed(2)} / 5,00`]);
+      const scoreRows = [[data.perfect.toFixed(0) === '0' ? '5,00' : '5,00', data.perfect, pct(data.perfect / data.total)], ['Inferior a 5,00', data.below.length, pct(data.below.length / data.total)], ['Total', data.total, '100,0 %']];
+      const caseRows = data.below.map(row => [row.id, row.date ? row.date.toLocaleDateString('es-CO') : 'Sin fecha', row.dependency, row.service, row.ratings.solution ?? '', row.ratings.timeliness ?? '', row.ratings.attitude ?? '', row.ratings.clarity ?? '', row.average.toFixed(2)]);
+      const comparisonRows = snapshot.comparison ? [
+        ['Total de encuestas', snapshot.comparison.previousPeriod, snapshot.summary.total, snapshot.comparison.total.previous, snapshot.comparison.total.difference],
+        ['Calificación promedio general', snapshot.comparison.previousPeriod, snapshot.summary.average.toFixed(2), snapshot.comparison.average.previous.toFixed(2), Math.abs(snapshot.comparison.average.difference) < 0.005 ? 'Se mantiene' : snapshot.comparison.average.difference.toFixed(2)],
+        ['Casos inferiores a 5,00', snapshot.comparison.previousPeriod, snapshot.summary.belowFive, snapshot.comparison.belowFive.previous, snapshot.comparison.belowFive.difference],
+        ['Dependencia con mayor participación', snapshot.comparison.previousPeriod, `${snapshot.comparison.dependency.current} (${snapshot.comparison.dependency.currentCount})`, `${snapshot.comparison.dependency.previous} (${snapshot.comparison.dependency.previousCount})`, 'Comparar'],
+        ['Servicio con mayor participación', snapshot.comparison.previousPeriod, `${snapshot.comparison.service.current} (${snapshot.comparison.service.currentCount})`, `${snapshot.comparison.service.previous} (${snapshot.comparison.service.previousCount})`, 'Comparar']
+      ] : [];
+      const children = [];
+      if (logoBytes) children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: logoBytes, transformation: { width: 185, height: 80 } })] }));
+      children.push(
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'INFORME GENERAL DE ENCUESTAS DE SATISFACCIÓN', bold: true, font: 'Arial', size: 28 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `MES DE ${snapshot.metadata.period}`, bold: true, font: 'Arial', size: 22 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Elaborado por: Miguel Ángel Correa Cano', bold: true, font: 'Arial', size: 20 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Periodo evaluado: ${snapshot.metadata.period}`, font: 'Arial', size: 20 })] }),
+        paragraph(`Los resultados presentados corresponden al consolidado de encuestas de satisfacción del periodo ${snapshot.metadata.period.toLowerCase()}.`),
+        sectionTitle('1. Total de encuestas del mes'),
+        paragraph(`Durante ${snapshot.metadata.period.toLowerCase()} se registraron ${data.total} encuestas de satisfacción correspondientes a los diferentes servicios atendidos.`),
+        paragraph(`El resultado general fue de ${data.average.toFixed(2).replace('.', ',')} sobre 5,00, lo que refleja una percepción ${data.average >= 4.8 ? 'ampliamente favorable' : 'que requiere seguimiento'} por parte de los usuarios encuestados.`),
+        paragraph(`De las ${data.total} encuestas, ${data.miguel} fueron identificadas con acompañamiento de Miguel Ángel Correa, equivalentes al ${pct(data.miguel / data.total)}; las ${data.total - data.miguel} restantes corresponden a encuestas complementarias.`),
+        table(['Indicador', 'Valor'], [
+          ['Total de encuestas analizadas', data.total],
+          ['Calificación promedio general', `${data.average.toFixed(2)} / 5,00`],
+          ['Pregunta con menor promedio', `${data.criteria.slice().sort((a, b) => a.average - b.average)[0].label} (${data.criteria.slice().sort((a, b) => a.average - b.average)[0].average.toFixed(2)})`],
+          ['Servicio con mayor participación', `${data.services[0]?.key || 'Sin dato'} - ${data.services[0]?.count || 0} encuestas (${pct((data.services[0]?.count || 0) / data.total)})`],
+          ['Dependencia con mayor participación', `${data.deps[0]?.key || 'Sin dato'} - ${data.deps[0]?.count || 0} encuestas (${pct((data.deps[0]?.count || 0) / data.total)})`],
+          ['Encuestas con acompañamiento', `${data.miguel} (${pct(data.miguel / data.total)})`],
+          ['Encuestas complementarias', `${data.total - data.miguel} (${pct((data.total - data.miguel) / data.total)})`]
+        ]),
+        sectionTitle('2. Distribución de encuestas por servicio evaluado'),
+        paragraph(`El servicio con mayor participación fue ${data.services[0]?.key || 'Sin dato'}.`),
+        table(['Servicio evaluado', 'Encuestas', 'Participación', 'Calificación promedio', 'Acompañamiento'], serviceTableRows),
+        sectionTitle('3. Distribución por dependencia'),
+        paragraph(`La dependencia con mayor participación fue ${data.deps[0]?.key || 'Sin dato'}, con ${data.deps[0]?.count || 0} encuestas, equivalente al ${pct((data.deps[0]?.count || 0) / data.total)} del total.`),
+        table(['Dependencia', 'Encuestas', 'Participación', 'Calificación promedio'], dependencyTableRows),
+        sectionTitle('4. Detalle por dependencia y servicio evaluado'),
+        paragraph('Cada fila corresponde a una dependencia y cada columna a uno de los servicios evaluados. La columna Total suma los servicios de la dependencia.'),
+        table(['Dependencia', ...data.serviceNames, 'Total'], matrixRows),
+        sectionTitle('5. Calificación promedio general'),
+        table(['Criterio evaluado', 'Promedio'], criteriaRows),
+        sectionTitle('6. Análisis de calificaciones obtenidas'),
+        paragraph(`De las ${data.total} encuestas registradas, ${data.perfect} (${pct(data.perfect / data.total)}) obtuvieron calificación máxima. Los resultados inferiores a 5,00 fueron ${data.below.length ? 'puntuales y requieren seguimiento específico' : 'inexistentes'}.`),
+        table(['Promedio final por encuesta', 'Encuestas', 'Participación'], scoreRows),
+        sectionTitle('Casos con calificaciones inferiores en alguno de los criterios:'),
+        data.below.length ? table(['ID', 'Fecha', 'Dependencia', 'Servicio', 'Solución', 'Oportunidad', 'Actitud', 'Claridad', 'Promedio'], caseRows) : paragraph('No se identificaron casos con calificaciones inferiores a 5,00.'),
+        ...reportNarratives(state.filtered, state.previousRows).cases.map(text => paragraph(text)),
+        sectionTitle('7. Comparativo respecto al mes anterior'),
+        snapshot.comparison ? table(['Indicador', 'Periodo anterior', 'Actual', 'Valor anterior', 'Variación'], comparisonRows) : paragraph('No se cargó un archivo del periodo anterior. Para generar este comparativo, cargue el consolidado del mes anterior antes de descargar el informe.'),
+        sectionTitle('8. Observaciones relevantes'),
+        new Paragraph({ children: [new TextRun({ text: 'Fortalezas identificadas:', bold: true, font: 'Arial', size: 20 })] }),
+        ...snapshot.narratives.strengths.map(text => new Paragraph({ text, bullet: { level: 0 } })),
+        new Paragraph({ children: [new TextRun({ text: 'Aspectos destacados para fortalecer:', bold: true, font: 'Arial', size: 20 })] }),
+        ...snapshot.narratives.opportunities.map(text => new Paragraph({ text, bullet: { level: 0 } })),
+        sectionTitle('9. Conclusión general'),
+        paragraph(snapshot.narratives.conclusion),
+        sectionTitle('Control de calidad de la información'),
+        paragraph(`Registros analizados: ${data.quality.analyzed}. Fechas faltantes: ${data.quality.missingDate}. Servicios faltantes: ${data.quality.missingService}. Dependencias faltantes: ${data.quality.missingDependency}. Criterios incompletos: ${data.quality.incompleteCriteria}. IDs duplicados: ${data.quality.duplicateIds.length}.`),
+        paragraph('Este informe se genera automáticamente a partir del consolidado cargado y debe ser revisado contra la base original antes de su aprobación institucional.')
+      );
+      const document = new Document({ sections: [{ properties: {}, children }] });
       const blob = await Packer.toBlob(document);
-      downloadBlob(blob, 'informe-encuestas.docx');
+      downloadBlob(blob, `informe-encuestas-${snapshot.metadata.period.toLowerCase().replace(/\s+/g, '-')}.docx`);
     });
