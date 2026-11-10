@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analizador de encuestas · Mesa de Servicios</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docx@9.0.2/build/index.umd.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section class="login-screen" aria-label="Acceso restringido">
+    <div class="login-card">
+      <span class="badge">Acceso restringido</span>
+      <h1>Analizador de encuestas</h1>
+      <p class="muted">Ingresa la contraseña para acceder al consolidado y a los informes.</p>
+      <form id="loginForm" class="login-form">
+        <label for="password">Contraseña
+          <input id="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button class="primary" type="submit">Ingresar</button>
+        <div id="loginError" class="login-error" role="alert"></div>
+      </form>
+    </div>
+  </section>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <span class="badge">Analizador institucional</span>
+        <h1>Encuestas de satisfacción</h1>
+        <p class="muted">Mesa de Servicios · Alcaldía de Itagüí</p>
+      </div>
+      <div class="actions">
+        <label class="file-label" for="file">Cargar consolidado Excel</label>
+        <input id="file" type="file" accept=".xlsx,.xls,.csv">
+        <button id="exportWord" class="secondary" disabled>Descargar informe Word</button>
+        <button id="exportData" class="secondary" disabled>Descargar datos JSON</button>
+        <button id="exportCsv" class="secondary" disabled>Descargar detalle CSV</button>
+      </div>
+    </header>
+
+    <section class="panel upload">
+      <div class="upload-info">
+        <div class="upload-icon">↥</div>
+        <div>
+          <strong id="fileName">Ningún archivo cargado</strong>
+          <p id="fileMeta" class="muted">Carga una base Excel para iniciar la validación y el análisis.</p>
+        </div>
+      </div>
+      <div id="status" class="status">La información se procesa localmente en este navegador.</div>
+    </section>
+
+    <section class="panel controls">
+      <label>Periodo
+        <select id="period">
+          <option value="all">Todos los registros</option>
+          <option value="month">Mes específico</option>
+          <option value="quarter">Trimestre</option>
+        </select>
+      </label>
+      <label>Mes
+        <select id="month" disabled><option value="all">Todos</option></select>
+      </label>
+      <label>Trimestre
+        <select id="quarter" disabled>
+          <option value="all">Todos</option>
+          <option value="1">Primer trimestre</option>
+          <option value="2">Segundo trimestre</option>
+          <option value="3">Tercer trimestre</option>
+          <option value="4">Cuarto trimestre</option>
+        </select>
+      </label>
+      <label>Dependencia
+        <select id="dependency"><option value="all">Todas</option></select>
+      </label>
+    </section>
+
+    <section class="grid">
+      <article class="panel metric"><div class="label">Encuestas analizadas</div><div id="mTotal" class="value">—</div><div class="hint">Registros válidos del filtro</div></article>
+      <article class="panel metric"><div class="label">Promedio general</div><div id="mAverage" class="value">—</div><div class="hint">Escala de 1,00 a 5,00</div></article>
+      <article class="panel metric"><div class="label">Promedio inferior a 5,00</div><div id="mBelow" class="value">—</div><div class="hint">Casos para seguimiento</div></article>
+      <article class="panel metric"><div class="label">Participación Miguel Ángel</div><div id="mMiguel" class="value">—</div><div class="hint">Identificada en observaciones</div></article>
+      <article class="panel metric"><div class="label">Servicio principal</div><div id="mService" class="value" style="font-size:18px">—</div><div id="mServiceHint" class="hint"></div></article>
+      <article class="panel metric"><div class="label">Dependencia principal</div><div id="mDependency" class="value" style="font-size:18px">—</div><div id="mDependencyHint" class="hint"></div></article>
+    </section>
+
+    <section class="grid">
+      <article class="panel span-6"><h2>Distribución por servicio</h2><p class="muted">Cantidad y participación del periodo seleccionado.</p><div class="chart-wrap"><canvas id="serviceChart"></canvas></div></article>
+      <article class="panel span-6"><h2>Distribución por dependencia</h2><p class="muted">Principales dependencias por número de encuestas.</p><div class="chart-wrap"><canvas id="dependencyChart"></canvas></div></article>
+      <article class="panel span-8"><h2>Tendencia mensual</h2><p class="muted">La vista mensual permite identificar crecimiento, disminución o estabilidad.</p><div class="chart-wrap"><canvas id="monthlyChart"></canvas></div></article>
+      <article class="panel span-4"><h2>Calificaciones por criterio</h2><p class="muted">Promedio de cada pregunta evaluada.</p><div class="chart-wrap"><canvas id="criteriaChart"></canvas></div></article>
+    </section>
+
+    <section class="grid">
+      <article class="panel span-6"><h2>Resumen por servicio</h2><div id="serviceTable" class="table-wrap"></div></article>
+      <article class="panel span-6"><h2>Resumen por dependencia</h2><div id="dependencyTable" class="table-wrap"></div></article>
+      <article class="panel span-12"><h2>Casos atípicos y oportunidades de mejora</h2><p class="muted">Registros con promedio inferior a 5,00, ordenados desde la menor calificación.</p><div id="casesTable" class="table-wrap"></div></article>
+      <article class="panel span-12"><h2>Control de calidad de la información</h2><p class="muted">Validaciones automáticas que deben quedar documentadas antes de aprobar el informe.</p><div id="qualityTable" class="table-wrap"></div></article>
+      <article class="panel span-12"><h2>Borrador de análisis ejecutivo</h2><div id="report" class="report">Carga un consolidado para generar el análisis.</div><p class="footer-note">El borrador debe ser revisado contra la base y el contexto institucional antes de incorporarlo a un informe oficial.</p></article>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
