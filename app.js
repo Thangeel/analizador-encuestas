@@ -295,6 +295,18 @@
       return firstLabel === lastLabel ? firstLabel.toUpperCase() : `${firstLabel} - ${lastLabel}`.toUpperCase();
     }
 
+    function dateRangeLabel(rows) {
+      const dates = rows.map(row => row.date).filter(Boolean).sort((a, b) => a - b);
+      if (!dates.length) return monthYearLabel(rows);
+      const first = dates[0];
+      const last = dates[dates.length - 1];
+      const month = first.toLocaleString('es-CO', { month: 'long' });
+      const year = first.getFullYear();
+      return first.getMonth() === last.getMonth() && first.getFullYear() === last.getFullYear()
+        ? `${String(first.getDate()).padStart(2, '0')} al ${String(last.getDate()).padStart(2, '0')} de ${month} de ${year}`
+        : `${first.toLocaleDateString('es-CO')} al ${last.toLocaleDateString('es-CO')}`;
+    }
+
     function metrics(rows) {
       const services = group(rows, 'service');
       const deps = group(rows, 'dependency');
@@ -396,6 +408,7 @@
           sheet: state.sheetName,
           previousSheet: state.previousSheetName,
           period: monthYearLabel(state.filtered),
+          dateRange: dateRangeLabel(state.filtered),
           filter: { period: $('period').value, month: $('month').value, quarter: $('quarter').value, dependency: $('dependency').value }
         },
         summary: { total: data.total, average: data.average, belowFive: data.below.length, perfect: data.perfect, miguelAngel: data.miguel },
@@ -465,7 +478,7 @@
         new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'INFORME GENERAL DE ENCUESTAS DE SATISFACCIÓN', bold: true, font: 'Arial', size: 28 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `MES DE ${snapshot.metadata.period}`, bold: true, font: 'Arial', size: 22 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Elaborado por: Miguel Ángel Correa Cano', bold: true, font: 'Arial', size: 20 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Periodo evaluado: ${snapshot.metadata.period}`, font: 'Arial', size: 20 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Periodo evaluado: ${snapshot.metadata.dateRange}`, font: 'Arial', size: 20 })] }),
         paragraph(`Los resultados presentados corresponden al consolidado de encuestas de satisfacción del periodo ${snapshot.metadata.period.toLowerCase()}.`),
         sectionTitle('1. Total de encuestas del mes'),
         paragraph(`Durante ${snapshot.metadata.period.toLowerCase()} se registraron ${data.total} encuestas de satisfacción correspondientes a los diferentes servicios atendidos.`),
