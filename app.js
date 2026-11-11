@@ -248,7 +248,7 @@
         try {
           const parsed = parseWorkbook(e.target.result);
           const periods = splitPeriods(parsed.rows);
-          state.rows = periods.current;
+          state.rows = parsed.rows;
           if (periods.previous.length) {
             state.previousRows = periods.previous;
             state.previousFileName = `${file.name} · periodo anterior`;
@@ -259,7 +259,7 @@
           $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros detectados · hoja: ${state.sheetName}`;
           $('status').className = 'status';
           $('status').textContent = periods.previous.length
-            ? 'Archivo cargado y validado. Se detectaron automáticamente el periodo actual y el anterior.'
+            ? `Archivo cargado y validado: ${state.rows.length.toLocaleString('es-CO')} registros. Se detectaron automáticamente el periodo actual y el anterior para el comparativo.`
             : 'Archivo cargado y validado localmente. Cargue el periodo anterior para completar el comparativo.';
           applyFilter();
         } catch (error) {
