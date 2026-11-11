@@ -3,6 +3,12 @@
     const authenticated = sessionStorage.getItem('survey-analyzer-authenticated') === 'true';
     if (authenticated) document.body.classList.add('authenticated');
     const get = id => document.getElementById(id);
+    function logError(context, error) {
+      const detail = error instanceof Error ? error.stack || error.message : String(error);
+      console.error(`[Analizador de encuestas] ${context}: ${detail}`, error);
+    }
+    window.addEventListener('error', event => logError('Error no controlado', event.error || event.message));
+    window.addEventListener('unhandledrejection', event => logError('Promesa rechazada sin controlar', event.reason));
     get('loginForm').addEventListener('submit', event => {
       event.preventDefault();
       const password = get('password').value;
@@ -387,6 +393,7 @@
             : 'Archivo cargado y validado localmente. Cargue el periodo anterior para completar el comparativo.';
           applyFilter();
         } catch (error) {
+          logError(`Error al cargar el consolidado "${file.name}"`, error);
           $('status').className = 'status error';
           $('status').textContent = error.message || 'No fue posible leer el archivo.';
         }
@@ -411,6 +418,7 @@
             : `Validación detenida en el periodo anterior: ${state.previousValidation.errors.join(' ')}`;
           applyFilter();
         } catch (error) {
+          logError(`Error al cargar el periodo anterior "${file.name}"`, error);
           state.previousRows = [];
           state.previousSourceRows = [];
           state.previousValidation = null;
@@ -644,8 +652,9 @@
     });
 
     $('exportWord').addEventListener('click', async () => {
-      const snapshot = reportSnapshot();
-      if (!snapshot.records.length || !window.docx) return;
+      try {
+        const snapshot = reportSnapshot();
+        if (!snapshot.records.length || !window.docx) return;
       const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, ImageRun, AlignmentType } = window.docx;
       const cell = (value, bold = false, header = false) => new TableCell({
         shading: header ? { fill: 'A9C9D8' } : undefined,
@@ -737,6 +746,11 @@
         },
         sections: [{ properties: {}, children }]
       });
-      const blob = await Packer.toBlob(document);
-      downloadBlob(blob, `informe-encuestas-${snapshot.metadata.period.toLowerCase().replace(/\s+/g, '-')}.docx`);
+        const blob = await Packer.toBlob(document);
+        downloadBlob(blob, `informe-encuestas-${snapshot.metadata.period.toLowerCase().replace(/\s+/g, '-')}.docx`);
+      } catch (error) {
+        logError('Error al generar el informe Word', error);
+        $('status').className = 'status error';
+        $('status').textContent = error.message || 'No fue posible generar el informe Word.';
+      }
     });
