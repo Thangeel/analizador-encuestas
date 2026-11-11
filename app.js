@@ -160,26 +160,36 @@
       const deps = [...new Set(state.rows.map(r => r.dependency).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'));
       $('dependency').innerHTML = '<option value="all">Todas</option>' + deps.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
     }
-    function duplicateValues(rows, keySelector) {
-      const counts = new Map();
+    function duplicateGroups(rows, keySelector) {
+      const groups = new Map();
       rows.forEach(row => {
         const key = keySelector(row);
-        if (key) counts.set(key, (counts.get(key) || 0) + 1);
+        if (!key) return;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(row);
       });
-      return [...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key);
+      return [...groups.entries()]
+        .filter(([, values]) => values.length > 1)
+        .map(([key, values]) => ({ key, rows: values.map(row => ({ sourceRow: row.sourceRow, id: row.id, period: periodKey(row) })) }));
     }
     function validateDataset(rows, sourceRows, filterError = '', processedRows = rows) {
       const invalidSource = sourceRows.filter(row => !row.valid);
       const sourceRowsByNumber = new Set(sourceRows.map(row => row.sourceRow));
       const processedRowsByNumber = new Set(processedRows.map(row => row.sourceRow));
       const omittedRows = processedRows.filter(row => !sourceRowsByNumber.has(row.sourceRow));
-      const duplicates = duplicateValues(processedRows, row => row.recordKey);
-      const duplicateIdsByPeriod = duplicateValues(processedRows.filter(row => row.explicitId), row => `${row.id}|${periodKey(row)}`);
+      const duplicateGroupsFound = duplicateGroups(processedRows, row => row.recordKey);
+      const duplicateIdGroups = duplicateGroups(processedRows.filter(row => row.explicitId), row => `${row.id}|${periodKey(row)}`);
+      const duplicates = duplicateGroupsFound.map(group => group.key);
+      const duplicateIdsByPeriod = duplicateIdGroups.map(group => group.key);
       const periodMismatches = processedRows.filter(row => !row.date || row.year !== row.date.getFullYear() || row.month !== row.date.getMonth() + 1);
+      const invalidDetails = invalidSource.map(row => `${row.sourceRow} (ID ${row.id}): ${row.validationErrors.join(', ')}`);
+      const duplicateDetails = [...duplicateGroupsFound, ...duplicateIdGroups]
+        .map(group => `filas ${group.rows.map(row => row.sourceRow).join(', ')}`)
+        .filter((detail, index, list) => list.indexOf(detail) === index);
       const errors = [];
-      if (invalidSource.length) errors.push(`${invalidSource.length} registro(s) de origen no son válidos.`);
+      if (invalidSource.length) errors.push(`${invalidSource.length} registro(s) de origen no son válidos. Filas: ${invalidDetails.slice(0, 8).join(' · ')}`);
       if (omittedRows.length || processedRowsByNumber.size !== processedRows.length) errors.push('Se detectaron registros omitidos o repetidos durante el procesamiento.');
-      if (duplicates.length || duplicateIdsByPeriod.length) errors.push('Se detectaron registros duplicados dentro de un mismo periodo.');
+      if (duplicates.length || duplicateIdsByPeriod.length) errors.push(`Se detectaron registros duplicados dentro de un mismo periodo. ${duplicateDetails.slice(0, 8).join(' · ')}`);
       if (periodMismatches.length) errors.push('Se detectaron registros asignados a un año o mes diferente de su fecha.');
       if (filterError) errors.push(filterError);
       return {
@@ -189,8 +199,10 @@
         processedTotal: processedRows.length,
         filteredTotal: rows.length,
         invalidTotal: invalidSource.length,
+        invalidDetails,
         duplicateKeys: duplicates,
         duplicateIdsByPeriod,
+        duplicateDetails,
         periodMismatches: periodMismatches.length,
         omittedTotal: omittedRows.length
       };
@@ -324,6 +336,7 @@
         ['Registros duplicados', state.validation?.duplicateKeys?.length || 0, state.validation?.duplicateKeys?.length ? 'Revisar' : 'No detectados'],
         ['IDs duplicados por periodo', duplicateIds.length, duplicateIds.length ? `Revisar: ${duplicateIds.slice(0, 8).join(', ')}` : 'No detectados'],
         ['Asignación temporal', state.validation?.periodMismatches || 0, state.validation?.periodMismatches ? 'Revisar' : 'OK'],
+        ['Detalle de inconsistencias', state.validation?.errors?.join(' ') || 'Sin inconsistencias', state.validation?.ok ? 'OK' : 'Revisar'],
         ...Object.entries(missing).map(([label, count]) => [label, count, count ? 'Revisar' : 'OK'])
       ];
       $('qualityTable').innerHTML = `<table><thead><tr><th>Validación</th><th class="num">Resultado</th><th>Estado</th></tr></thead><tbody>${rowsHtml.map(row => `<tr><td>${esc(row[0])}</td><td class="num">${esc(row[1])}</td><td class="${String(row[2]).startsWith('OK') || row[2] === '100 %' || row[2] === 'No detectados' ? 'good' : 'risk'}">${esc(row[2])}</td></tr>`).join('')}</tbody></table>`;
