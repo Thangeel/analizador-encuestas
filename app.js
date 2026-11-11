@@ -338,11 +338,7 @@
       renderQuality(rows);
       const reportRows = currentReportRows();
       $('report').textContent = buildReport(reportRows, group(reportRows, 'service'), group(reportRows, 'dependency'), reportRows.filter(row => row.average < 5).sort((a, b) => a.average - b.average), reportRows.filter(row => row.miguel).length);
-      if (state.validation && !state.validation.ok) {
-        $('status').className = 'status error';
-        $('status').textContent = `Validación detenida: ${state.validation.errors.join(' ')}`;
-      }
-      ['exportWord', 'exportData', 'exportCsv'].forEach(id => { $(id).disabled = !total || Boolean(state.validation && !state.validation.ok); });
+      ['exportWord', 'exportData', 'exportCsv'].forEach(id => { $(id).disabled = !total; });
     }
     function renderQuality(rows) {
       const duplicateIds = state.validation?.duplicateIdsByPeriod || [];
@@ -452,9 +448,7 @@
           state.previousSheetName = parsed.sheetName;
           state.previousValidation = validateDataset(parsed.rows, parsed.sourceRows, '', parsed.rows);
           $('status').className = 'status';
-          $('status').textContent = state.previousValidation.ok
-            ? `Periodo anterior cargado: ${state.previousRows.length.toLocaleString('es-CO')} registros.`
-            : `Validación detenida en el periodo anterior: ${state.previousValidation.errors.join(' ')}`;
+          $('status').textContent = `Periodo anterior cargado: ${state.previousRows.length.toLocaleString('es-CO')} registros.`;
           applyFilter();
         } catch (error) {
           logError(`Error al cargar el periodo anterior "${file.name}"`, error);
