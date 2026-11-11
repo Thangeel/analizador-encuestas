@@ -88,7 +88,7 @@
           average: finalAverage,
           miguel: /miguel\s*[aá]ngel\s*correa|acompa[nñ]ada por miguel/i.test(suggestion)
         };
-      }).filter(r => r.service || r.dependency || r.date);
+      }).filter(r => r.service && r.dependency && r.date);
     }
     function parseWorkbook(buffer) {
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
@@ -384,6 +384,36 @@
       };
     }
 
+    function historicalComparison(rows) {
+      const buckets = new Map();
+      rows.forEach(row => {
+        const key = periodKey(row);
+        if (!key) return;
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(row);
+      });
+      return [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([key, values], index, all) => {
+        const current = metrics(values);
+        const priorValues = index ? all[index - 1][1] : [];
+        const prior = priorValues.length ? metrics(priorValues) : null;
+        return {
+          period: monthYearLabel(values),
+          total: current.total,
+          average: current.average,
+          belowFive: current.below.length,
+          topDependency: current.deps[0]?.key || 'Sin dato',
+          topDependencyCount: current.deps[0]?.count || 0,
+          topService: current.services[0]?.key || 'Sin dato',
+          topServiceCount: current.services[0]?.count || 0,
+          variation: prior ? {
+            total: current.total - prior.total,
+            average: current.average - prior.average,
+            belowFive: current.below.length - prior.below.length
+          } : null
+        };
+      });
+    }
+
     function caseAnalysis(row) {
       const lowest = ratingFields
         .filter(item => row.ratings[item.key] !== null)
@@ -396,6 +426,11 @@
     function reportNarratives(current, previous) {
       const data = metrics(current);
       const comparisonData = comparison(current, previous);
+      const historySource = [...state.rows];
+      state.previousRows.forEach(row => {
+        if (!historySource.some(existing => String(existing.id) === String(row.id) && periodKey(existing) === periodKey(row))) historySource.push(row);
+      });
+      const history = historicalComparison(historySource);
       const strongestCriteria = data.criteria.filter(item => item.average >= 4.99).map(item => item.shortLabel.toLowerCase());
       const lowestCriterion = data.criteria.slice().sort((a, b) => a.average - b.average)[0];
       const strengths = [
@@ -421,7 +456,7 @@
         'Continuar con la revisión y depuración de las bases antes de consolidar los resultados del informe mensual.',
         'Verificar que las observaciones permitan distinguir claramente entre encuestas acompañadas y encuestas complementarias.'
       ];
-      return { strengths, opportunities, management, conclusion, cases: data.below.map(caseAnalysis), comparison: comparisonData };
+      return { strengths, opportunities, management, conclusion, cases: data.below.map(caseAnalysis), comparison: comparisonData, history };
     }
 
     function reportSnapshot() {
@@ -448,6 +483,7 @@
         cases: data.below.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, dependency: row.dependency, service: row.service, ratings: row.ratings, average: row.average, suggestion: row.suggestion })),
         narratives,
         comparison: narratives.comparison,
+        historicalComparison: narratives.history,
         records: state.filtered.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, year: row.year, month: row.month, service: row.service, dependency: row.dependency, respondent: row.respondent, ratings: row.ratings, average: row.average, miguelAngel: row.miguel, suggestion: row.suggestion }))
       };
     }
@@ -482,7 +518,7 @@
       });
       const headerRow = labels => new TableRow({ children: labels.map(label => cell(label, true, true)) });
       const table = (headers, rows) => new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow(headers), ...rows.map(row => new TableRow({ children: row.map(value => cell(value)) }))] });
-      const sectionTitle = text => new Paragraph({ text, heading: HeadingLevel.HEADING_1 });
+      const sectionTitle = text => new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text, bold: true, font: 'Arial', size: 22 })] });
       const paragraph = text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], spacing: { after: 120 } });
       const logoBytes = window.ALCALDIA_LOGO_BASE64 ? Uint8Array.from(atob(window.ALCALDIA_LOGO_BASE64), char => char.charCodeAt(0)) : null;
       const data = metrics(state.filtered);
@@ -495,7 +531,16 @@
       const criteriaRows = data.criteria.map(item => [item.label, `${item.average.toFixed(2)} / 5,00`]);
       const scoreRows = [[data.perfect.toFixed(0) === '0' ? '5,00' : '5,00', data.perfect, pct(data.perfect / data.total)], ['Inferior a 5,00', data.below.length, pct(data.below.length / data.total)], ['Total', data.total, '100,0 %']];
       const caseRows = data.below.map(row => [row.id, row.date ? row.date.toLocaleDateString('es-CO') : 'Sin fecha', row.dependency, row.service, row.ratings.solution ?? '', row.ratings.timeliness ?? '', row.ratings.attitude ?? '', row.ratings.clarity ?? '', row.average.toFixed(2)]);
-      const comparisonRows = snapshot.comparison ? [
+      const comparisonRows = snapshot.historicalComparison.length > 1 ? snapshot.historicalComparison.map(item => [
+        item.period,
+        item.total,
+        item.average.toFixed(2),
+        item.belowFive,
+        item.topDependency,
+        item.topService,
+        item.variation ? `${item.variation.total >= 0 ? '+' : ''}${item.variation.total}` : 'Base'
+      ]) : [];
+      const comparisonRowsLegacy = snapshot.comparison ? [
         ['Total de encuestas', snapshot.comparison.previousPeriod, snapshot.summary.total, snapshot.comparison.total.previous, snapshot.comparison.total.difference],
         ['Calificación promedio general', snapshot.comparison.previousPeriod, snapshot.summary.average.toFixed(2), snapshot.comparison.average.previous.toFixed(2), Math.abs(snapshot.comparison.average.difference) < 0.005 ? 'Se mantiene' : snapshot.comparison.average.difference.toFixed(2)],
         ['Casos inferiores a 5,00', snapshot.comparison.previousPeriod, snapshot.summary.belowFive, snapshot.comparison.belowFive.previous, snapshot.comparison.belowFive.difference],
@@ -541,18 +586,31 @@
         data.below.length ? table(['ID', 'Fecha', 'Dependencia', 'Servicio', 'Solución', 'Oportunidad', 'Actitud', 'Claridad', 'Promedio'], caseRows) : paragraph('No se identificaron casos con calificaciones inferiores a 5,00.'),
         ...reportNarratives(state.filtered, state.previousRows).cases.map(text => paragraph(text)),
         sectionTitle('7. Comparativo respecto al mes anterior'),
-        snapshot.comparison ? table(['Indicador', 'Periodo anterior', 'Actual', 'Valor anterior', 'Variación'], comparisonRows) : paragraph('No se cargó un archivo del periodo anterior. Para generar este comparativo, cargue el consolidado del mes anterior antes de descargar el informe.'),
+        snapshot.historicalComparison.length > 1
+          ? table(['Periodo', 'Encuestas', 'Promedio', 'Casos < 5,00', 'Dependencia principal', 'Servicio principal', 'Variación encuestas'], comparisonRows)
+          : snapshot.comparison
+            ? table(['Indicador', 'Periodo anterior', 'Actual', 'Valor anterior', 'Variación'], comparisonRowsLegacy)
+            : paragraph('No se encontraron meses anteriores para realizar el comparativo.'),
         sectionTitle('8. Observaciones relevantes'),
         new Paragraph({ children: [new TextRun({ text: 'Fortalezas identificadas:', bold: true, font: 'Arial', size: 20 })] }),
-        ...snapshot.narratives.strengths.map(text => new Paragraph({ text, bullet: { level: 0 } })),
+        ...snapshot.narratives.strengths.map(text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], bullet: { level: 0 } })),
         new Paragraph({ children: [new TextRun({ text: 'Aspectos destacados para fortalecer:', bold: true, font: 'Arial', size: 20 })] }),
-        ...snapshot.narratives.opportunities.map(text => new Paragraph({ text, bullet: { level: 0 } })),
+        ...snapshot.narratives.opportunities.map(text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], bullet: { level: 0 } })),
         new Paragraph({ children: [new TextRun({ text: 'Aspectos por mejorar en la gestión de aplicación de encuestas a cargo de Miguel Ángel Correa Cano:', bold: true, font: 'Arial', size: 20 })] }),
-        ...snapshot.narratives.management.map(text => new Paragraph({ text, bullet: { level: 0 } })),
+        ...snapshot.narratives.management.map(text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], bullet: { level: 0 } })),
         sectionTitle('9. Conclusión general'),
         paragraph(snapshot.narratives.conclusion),
       );
-      const document = new Document({ sections: [{ properties: {}, children }] });
+      const document = new Document({
+        styles: {
+          default: { document: { run: { font: 'Arial', size: 20 } }, paragraph: { run: { font: 'Arial', size: 20 } } },
+          paragraphStyles: [
+            { id: 'Normal', name: 'Normal', basedOn: 'Normal', next: 'Normal', run: { font: 'Arial', size: 20 } },
+            { id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', run: { font: 'Arial', bold: true, size: 22 } }
+          ]
+        },
+        sections: [{ properties: {}, children }]
+      });
       const blob = await Packer.toBlob(document);
       downloadBlob(blob, `informe-encuestas-${snapshot.metadata.period.toLowerCase().replace(/\s+/g, '-')}.docx`);
     });
