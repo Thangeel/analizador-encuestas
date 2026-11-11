@@ -99,6 +99,19 @@
         sheetName
       };
     }
+    function periodKey(row) {
+      return row.date ? `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, '0')}` : '';
+    }
+    function splitPeriods(rows) {
+      const periods = [...new Set(rows.map(periodKey).filter(Boolean))].sort();
+      if (periods.length < 2) return { current: rows, previous: [] };
+      const currentPeriod = periods[periods.length - 1];
+      const previousPeriod = periods[periods.length - 2];
+      return {
+        current: rows.filter(row => periodKey(row) === currentPeriod),
+        previous: rows.filter(row => periodKey(row) === previousPeriod)
+      };
+    }
     function options() {
       const months = [...new Set(state.rows.map(r => r.month).filter(Boolean))].sort((a,b) => a-b);
       $('month').innerHTML = '<option value="all">Todos</option>' + months.map(m => `<option value="${m}">${new Date(2020, m-1, 1).toLocaleString('es-CO', {month:'long'})}</option>`).join('');
@@ -234,13 +247,20 @@
       reader.onload = e => {
         try {
           const parsed = parseWorkbook(e.target.result);
-          state.rows = parsed.rows;
+          const periods = splitPeriods(parsed.rows);
+          state.rows = periods.current;
+          if (periods.previous.length) {
+            state.previousRows = periods.previous;
+            state.previousFileName = `${file.name} · periodo anterior`;
+          }
           state.sheetName = parsed.sheetName;
           options();
           $('fileName').textContent = file.name;
           $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros detectados · hoja: ${state.sheetName}`;
           $('status').className = 'status';
-          $('status').textContent = 'Archivo cargado y validado localmente.';
+          $('status').textContent = periods.previous.length
+            ? 'Archivo cargado y validado. Se detectaron automáticamente el periodo actual y el anterior.'
+            : 'Archivo cargado y validado localmente. Cargue el periodo anterior para completar el comparativo.';
           applyFilter();
         } catch (error) {
           $('status').className = 'status error';
@@ -393,8 +413,15 @@
       if (comparisonData) {
         opportunities.push(`Frente a ${comparisonData.previousPeriod.toLowerCase()}, el volumen de encuestas varió en ${comparisonData.total.difference > 0 ? 'un aumento' : 'una reducción'} de ${Math.abs(comparisonData.total.difference)} registro(s).`);
       }
-      const conclusion = `Durante ${monthYearLabel(current).toLowerCase()} se analizaron ${data.total} encuestas de satisfacción, con un promedio general de ${data.average.toFixed(2).replace('.', ',')} sobre 5,00. ${data.below.length ? `Se identificaron ${data.below.length} caso(s) para seguimiento.` : 'No se identificaron casos críticos.'} ${comparisonData ? `En comparación con ${comparisonData.previousPeriod.toLowerCase()}, el promedio ${Math.abs(comparisonData.average.difference) < 0.005 ? 'se mantuvo estable' : comparisonData.average.difference > 0 ? 'mejoró' : 'disminuyó'}.` : ''}`;
-      return { strengths, opportunities, conclusion, cases: data.below.map(caseAnalysis), comparison: comparisonData };
+      const conclusion = `Durante ${monthYearLabel(current).toLowerCase()} se analizaron ${data.total} encuestas de satisfacción, obteniendo una calificación promedio general de ${data.average.toFixed(2).replace('.', ',')} sobre 5,00. Del total, ${data.perfect} encuestas (${pct(data.perfect / data.total)}) alcanzaron un promedio individual de 5,00 y ${data.below.length} presentaron resultados inferiores a 5,00, por lo que deben ser revisadas según el criterio con menor valoración y la observación registrada. El servicio con mayor participación fue ${data.services[0]?.key || 'Sin dato'}, mientras que la dependencia con mayor número de respuestas fue ${data.deps[0]?.key || 'Sin dato'}. ${comparisonData ? `En comparación con ${comparisonData.previousPeriod.toLowerCase()}, el total de encuestas ${comparisonData.total.difference === 0 ? 'se mantuvo sin variación' : comparisonData.total.difference > 0 ? `aumentó en ${comparisonData.total.difference}` : `disminuyó en ${Math.abs(comparisonData.total.difference)}`}; el promedio general ${Math.abs(comparisonData.average.difference) < 0.005 ? 'se mantuvo estable' : comparisonData.average.difference > 0 ? `aumentó en ${comparisonData.average.difference.toFixed(2)}` : `disminuyó en ${Math.abs(comparisonData.average.difference).toFixed(2)}`}; y los casos inferiores a 5,00 ${comparisonData.belowFive.difference === 0 ? 'no presentaron variación' : comparisonData.belowFive.difference > 0 ? `aumentaron en ${comparisonData.belowFive.difference}` : `disminuyeron en ${Math.abs(comparisonData.belowFive.difference)}`}.` : 'El comparativo con el mes anterior no fue calculado porque no se proporcionó una base histórica.'} En consecuencia, se recomienda mantener las fortalezas identificadas, verificar la solución antes del cierre, mejorar la oportunidad y claridad cuando corresponda y hacer seguimiento prioritario a los casos con menor calificación.`;
+      const management = [
+        `Se identificaron ${data.miguel} encuestas asociadas al acompañamiento de Miguel Ángel Correa Cano (${pct(data.miguel / data.total)} del total).`,
+        'Optimizar la estrategia de aplicación de encuestas, buscando mayor efectividad en la comunicación con los usuarios.',
+        'Mejorar la organización semanal de las encuestas para contribuir al cumplimiento oportuno de la meta establecida.',
+        'Continuar con la revisión y depuración de las bases antes de consolidar los resultados del informe mensual.',
+        'Verificar que las observaciones permitan distinguir claramente entre encuestas acompañadas y encuestas complementarias.'
+      ];
+      return { strengths, opportunities, management, conclusion, cases: data.below.map(caseAnalysis), comparison: comparisonData };
     }
 
     function reportSnapshot() {
@@ -449,8 +476,11 @@
       const snapshot = reportSnapshot();
       if (!snapshot.records.length || !window.docx) return;
       const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, ImageRun, AlignmentType } = window.docx;
-      const cell = (value, bold = false) => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(value ?? ''), bold, font: 'Arial', size: 18 })] })] });
-      const headerRow = labels => new TableRow({ children: labels.map(label => cell(label, true)) });
+      const cell = (value, bold = false, header = false) => new TableCell({
+        shading: header ? { fill: '215868' } : undefined,
+        children: [new Paragraph({ children: [new TextRun({ text: String(value ?? ''), bold, color: header ? 'FFFFFF' : '000000', font: 'Arial', size: 18 })] })]
+      });
+      const headerRow = labels => new TableRow({ children: labels.map(label => cell(label, true, true)) });
       const table = (headers, rows) => new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow(headers), ...rows.map(row => new TableRow({ children: row.map(value => cell(value)) }))] });
       const sectionTitle = text => new Paragraph({ text, heading: HeadingLevel.HEADING_1 });
       const paragraph = text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], spacing: { after: 120 } });
@@ -480,10 +510,6 @@
         new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Elaborado por: Miguel Ángel Correa Cano', bold: true, font: 'Arial', size: 20 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Periodo evaluado: ${snapshot.metadata.dateRange}`, font: 'Arial', size: 20 })] }),
         paragraph(`Los resultados presentados corresponden al consolidado de encuestas de satisfacción del periodo ${snapshot.metadata.period.toLowerCase()}.`),
-        sectionTitle('1. Total de encuestas del mes'),
-        paragraph(`Durante ${snapshot.metadata.period.toLowerCase()} se registraron ${data.total} encuestas de satisfacción correspondientes a los diferentes servicios atendidos.`),
-        paragraph(`El resultado general fue de ${data.average.toFixed(2).replace('.', ',')} sobre 5,00, lo que refleja una percepción ${data.average >= 4.8 ? 'ampliamente favorable' : 'que requiere seguimiento'} por parte de los usuarios encuestados.`),
-        paragraph(`De las ${data.total} encuestas, ${data.miguel} fueron identificadas con acompañamiento de Miguel Ángel Correa, equivalentes al ${pct(data.miguel / data.total)}; las ${data.total - data.miguel} restantes corresponden a encuestas complementarias.`),
         table(['Indicador', 'Valor'], [
           ['Total de encuestas analizadas', data.total],
           ['Calificación promedio general', `${data.average.toFixed(2)} / 5,00`],
@@ -493,6 +519,10 @@
           ['Encuestas con acompañamiento', `${data.miguel} (${pct(data.miguel / data.total)})`],
           ['Encuestas complementarias', `${data.total - data.miguel} (${pct((data.total - data.miguel) / data.total)})`]
         ]),
+        sectionTitle('1. Total de encuestas del mes'),
+        paragraph(`Durante ${snapshot.metadata.period.toLowerCase()} se registraron ${data.total} encuestas de satisfacción correspondientes a los diferentes servicios atendidos.`),
+        paragraph(`El resultado general fue de ${data.average.toFixed(2).replace('.', ',')} sobre 5,00, lo que refleja una percepción ${data.average >= 4.8 ? 'ampliamente favorable' : 'que requiere seguimiento'} por parte de los usuarios encuestados.`),
+        paragraph(`De las ${data.total} encuestas, ${data.miguel} fueron identificadas con acompañamiento de Miguel Ángel Correa, equivalentes al ${pct(data.miguel / data.total)}; las ${data.total - data.miguel} restantes corresponden a encuestas complementarias.`),
         sectionTitle('2. Distribución de encuestas por servicio evaluado'),
         paragraph(`El servicio con mayor participación fue ${data.services[0]?.key || 'Sin dato'}.`),
         table(['Servicio evaluado', 'Encuestas', 'Participación', 'Calificación promedio', 'Acompañamiento'], serviceTableRows),
@@ -517,11 +547,10 @@
         ...snapshot.narratives.strengths.map(text => new Paragraph({ text, bullet: { level: 0 } })),
         new Paragraph({ children: [new TextRun({ text: 'Aspectos destacados para fortalecer:', bold: true, font: 'Arial', size: 20 })] }),
         ...snapshot.narratives.opportunities.map(text => new Paragraph({ text, bullet: { level: 0 } })),
+        new Paragraph({ children: [new TextRun({ text: 'Aspectos por mejorar en la gestión de aplicación de encuestas a cargo de Miguel Ángel Correa Cano:', bold: true, font: 'Arial', size: 20 })] }),
+        ...snapshot.narratives.management.map(text => new Paragraph({ text, bullet: { level: 0 } })),
         sectionTitle('9. Conclusión general'),
         paragraph(snapshot.narratives.conclusion),
-        sectionTitle('Control de calidad de la información'),
-        paragraph(`Registros analizados: ${data.quality.analyzed}. Fechas faltantes: ${data.quality.missingDate}. Servicios faltantes: ${data.quality.missingService}. Dependencias faltantes: ${data.quality.missingDependency}. Criterios incompletos: ${data.quality.incompleteCriteria}. IDs duplicados: ${data.quality.duplicateIds.length}.`),
-        paragraph('Este informe se genera automáticamente a partir del consolidado cargado y debe ser revisado contra la base original antes de su aprobación institucional.')
       );
       const document = new Document({ sections: [{ properties: {}, children }] });
       const blob = await Packer.toBlob(document);
