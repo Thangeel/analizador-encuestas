@@ -62,9 +62,9 @@
     }
     function parseDate(value) {
       if (value instanceof Date && !isNaN(value)) {
-        const year = value.getUTCFullYear();
-        const month = value.getUTCMonth();
-        const day = value.getUTCDate();
+        const year = value.getFullYear();
+        const month = value.getMonth();
+        const day = value.getDate();
         return dateFromParts(year, month, day);
       }
       if (typeof value === 'number' && window.XLSX?.SSF?.parse_date_code) {
@@ -74,7 +74,7 @@
       const text = clean(value);
       const isoDate = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
       if (isoDate) return dateFromParts(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]));
-      const localDate = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+      const localDate = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/);
       if (localDate) return dateFromParts(Number(localDate[3]), Number(localDate[2]) - 1, Number(localDate[1]));
       const textDate = text.match(/^(\d{1,2})\s+([A-Za-zÁÉÍÓÚáéíóú]+)\s+(\d{4})$/i);
       if (textDate) {
