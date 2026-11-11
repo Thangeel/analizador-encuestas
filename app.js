@@ -130,6 +130,15 @@
       updatePeriodLabel();
       render();
     }
+    function currentReportRows() {
+      const dependency = $('dependency').value;
+      const periods = [...new Set(state.rows.map(periodKey).filter(Boolean))].sort();
+      if ($('period').value === 'all' && periods.length > 1) {
+        const latestPeriod = periods[periods.length - 1];
+        return state.rows.filter(row => periodKey(row) === latestPeriod && (dependency === 'all' || row.dependency === dependency));
+      }
+      return state.filtered;
+    }
     function updatePeriodLabel() {
       const mode = $('period').value;
       const month = $('month').value;
@@ -187,7 +196,8 @@
       renderCharts(rows, services, deps);
       renderTables(rows, services, deps, below);
       renderQuality(rows);
-      $('report').textContent = buildReport(rows, services, deps, below, miguel);
+      const reportRows = currentReportRows();
+      $('report').textContent = buildReport(reportRows, group(reportRows, 'service'), group(reportRows, 'dependency'), reportRows.filter(row => row.average < 5).sort((a, b) => a.average - b.average), reportRows.filter(row => row.miguel).length);
       ['exportWord', 'exportData', 'exportCsv'].forEach(id => { $(id).disabled = !total; });
     }
     function renderQuality(rows) {
@@ -426,8 +436,8 @@
     function reportNarratives(current, previous) {
       const data = metrics(current);
       const comparisonData = comparison(current, previous);
-      const historySource = [...state.rows];
-      state.previousRows.forEach(row => {
+      const historySource = [...current];
+      previous.forEach(row => {
         if (!historySource.some(existing => String(existing.id) === String(row.id) && periodKey(existing) === periodKey(row))) historySource.push(row);
       });
       const history = historicalComparison(historySource);
@@ -460,8 +470,9 @@
     }
 
     function reportSnapshot() {
-      const data = metrics(state.filtered);
-      const narratives = reportNarratives(state.filtered, state.previousRows);
+      const reportRows = currentReportRows();
+      const data = metrics(reportRows);
+      const narratives = reportNarratives(reportRows, state.previousRows);
       return {
         metadata: {
           generatedAt: new Date().toISOString(),
@@ -469,8 +480,8 @@
           previousFile: state.previousFileName,
           sheet: state.sheetName,
           previousSheet: state.previousSheetName,
-          period: monthYearLabel(state.filtered),
-          dateRange: dateRangeLabel(state.filtered),
+          period: monthYearLabel(reportRows),
+          dateRange: dateRangeLabel(reportRows),
           filter: { period: $('period').value, month: $('month').value, quarter: $('quarter').value, dependency: $('dependency').value }
         },
         summary: { total: data.total, average: data.average, belowFive: data.below.length, perfect: data.perfect, miguelAngel: data.miguel },
@@ -484,7 +495,7 @@
         narratives,
         comparison: narratives.comparison,
         historicalComparison: narratives.history,
-        records: state.filtered.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, year: row.year, month: row.month, service: row.service, dependency: row.dependency, respondent: row.respondent, ratings: row.ratings, average: row.average, miguelAngel: row.miguel, suggestion: row.suggestion }))
+        records: reportRows.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, year: row.year, month: row.month, service: row.service, dependency: row.dependency, respondent: row.respondent, ratings: row.ratings, average: row.average, miguelAngel: row.miguel, suggestion: row.suggestion }))
       };
     }
 
@@ -521,25 +532,17 @@
       const sectionTitle = text => new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text, bold: true, font: 'Arial', size: 22 })] });
       const paragraph = text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], spacing: { after: 120 } });
       const logoBytes = window.ALCALDIA_LOGO_BASE64 ? Uint8Array.from(atob(window.ALCALDIA_LOGO_BASE64), char => char.charCodeAt(0)) : null;
-      const data = metrics(state.filtered);
+      const reportRows = currentReportRows();
+      const data = metrics(reportRows);
       const serviceTableRows = data.services.map(item => [item.key, item.count, pct(item.count / data.total), `${item.average.toFixed(2)} / 5,00`, item.miguel]);
       serviceTableRows.push(['Total', data.total, '100,0 %', `${data.average.toFixed(2)} / 5,00`, data.miguel]);
       const dependencyTableRows = data.deps.map(item => [item.key, item.count, pct(item.count / data.total), item.average.toFixed(2)]);
       dependencyTableRows.push(['Total', data.total, '100,0 %', data.average.toFixed(2)]);
       const matrixRows = data.matrix.map(row => [row.dependency, ...row.values, row.total]);
-      matrixRows.push(['Total', ...data.serviceNames.map(service => state.filtered.filter(item => item.service === service).length), data.total]);
+      matrixRows.push(['Total', ...data.serviceNames.map(service => reportRows.filter(item => item.service === service).length), data.total]);
       const criteriaRows = data.criteria.map(item => [item.label, `${item.average.toFixed(2)} / 5,00`]);
       const scoreRows = [[data.perfect.toFixed(0) === '0' ? '5,00' : '5,00', data.perfect, pct(data.perfect / data.total)], ['Inferior a 5,00', data.below.length, pct(data.below.length / data.total)], ['Total', data.total, '100,0 %']];
       const caseRows = data.below.map(row => [row.id, row.date ? row.date.toLocaleDateString('es-CO') : 'Sin fecha', row.dependency, row.service, row.ratings.solution ?? '', row.ratings.timeliness ?? '', row.ratings.attitude ?? '', row.ratings.clarity ?? '', row.average.toFixed(2)]);
-      const comparisonRows = snapshot.historicalComparison.length > 1 ? snapshot.historicalComparison.map(item => [
-        item.period,
-        item.total,
-        item.average.toFixed(2),
-        item.belowFive,
-        item.topDependency,
-        item.topService,
-        item.variation ? `${item.variation.total >= 0 ? '+' : ''}${item.variation.total}` : 'Base'
-      ]) : [];
       const comparisonRowsLegacy = snapshot.comparison ? [
         ['Total de encuestas', snapshot.comparison.previousPeriod, snapshot.summary.total, snapshot.comparison.total.previous, snapshot.comparison.total.difference],
         ['Calificación promedio general', snapshot.comparison.previousPeriod, snapshot.summary.average.toFixed(2), snapshot.comparison.average.previous.toFixed(2), Math.abs(snapshot.comparison.average.difference) < 0.005 ? 'Se mantiene' : snapshot.comparison.average.difference.toFixed(2)],
@@ -584,13 +587,11 @@
         table(['Promedio final por encuesta', 'Encuestas', 'Participación'], scoreRows),
         sectionTitle('Casos con calificaciones inferiores en alguno de los criterios:'),
         data.below.length ? table(['ID', 'Fecha', 'Dependencia', 'Servicio', 'Solución', 'Oportunidad', 'Actitud', 'Claridad', 'Promedio'], caseRows) : paragraph('No se identificaron casos con calificaciones inferiores a 5,00.'),
-        ...reportNarratives(state.filtered, state.previousRows).cases.map(text => paragraph(text)),
+        ...reportNarratives(reportRows, state.previousRows).cases.map(text => paragraph(text)),
         sectionTitle('7. Comparativo respecto al mes anterior'),
-        snapshot.historicalComparison.length > 1
-          ? table(['Periodo', 'Encuestas', 'Promedio', 'Casos < 5,00', 'Dependencia principal', 'Servicio principal', 'Variación encuestas'], comparisonRows)
-          : snapshot.comparison
-            ? table(['Indicador', 'Periodo anterior', 'Actual', 'Valor anterior', 'Variación'], comparisonRowsLegacy)
-            : paragraph('No se encontraron meses anteriores para realizar el comparativo.'),
+        snapshot.comparison
+          ? table(['Indicador', 'Periodo anterior', 'Actual', 'Valor anterior', 'Variación'], comparisonRowsLegacy)
+          : paragraph('No se encontraron meses anteriores para realizar el comparativo.'),
         sectionTitle('8. Observaciones relevantes'),
         new Paragraph({ children: [new TextRun({ text: 'Fortalezas identificadas:', bold: true, font: 'Arial', size: 20 })] }),
         ...snapshot.narratives.strengths.map(text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], bullet: { level: 0 } })),
