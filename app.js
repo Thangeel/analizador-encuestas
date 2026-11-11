@@ -47,10 +47,10 @@
       { key: 'clarity', label: 'Claridad en las indicaciones' }
     ];
     const aliases = {
-      service: ['Servicio evaluado'],
-      dependency: ['Unidad Administrativa'],
+      service: ['Servicio evaluado', 'Servicio'],
+      dependency: ['Unidad Administrativa', 'Dependencia', 'Unidad administrativa'],
       name: ['Nombre2', 'Nombre'],
-      start: ['Hora de inicio'],
+      start: ['Hora de inicio', 'Fecha de inicio', 'Fecha y hora', 'Marca temporal', 'Timestamp'],
       suggestion: ['Sugerencias y/o recomendaciones'],
       solution: ['¿Se dio solución o respuesta a sus requerimientos?'],
       timeliness: ['¿Los servicios fueron prestados de manera oportuna?'],
@@ -61,6 +61,18 @@
     function findKey(headers, possible) {
       const wanted = possible.map(norm);
       return headers.find(h => wanted.includes(norm(h))) || headers.find(h => wanted.some(w => norm(h).includes(w)));
+    }
+    function headerInfo(raw) {
+      let best = { index: -1, headers: [], keys: {}, score: -1 };
+      const limit = Math.min(raw.length, 20);
+      for (let index = 0; index < limit; index += 1) {
+        const headers = (raw[index] || []).map(clean);
+        const keys = {};
+        for (const [semantic, options] of Object.entries(aliases)) keys[semantic] = findKey(headers, options);
+        const score = Object.values(keys).filter(Boolean).length;
+        if (score > best.score) best = { index, headers, keys, score };
+      }
+      return best;
     }
     function dateFromParts(year, month, day) {
       const date = new Date(year, month, day);
@@ -91,11 +103,18 @@
       return null;
     }
     function mapRows(raw) {
-      const headers = raw.length ? raw[0].map(clean) : [];
-      const keys = {};
-      for (const [semantic, options] of Object.entries(aliases)) keys[semantic] = findKey(headers, options);
-      if (!keys.service || !keys.dependency || !keys.start) throw new Error('No se encontraron las columnas mínimas de servicio, dependencia y fecha.');
-      return raw.slice(1).map((cells, index) => {
+      const header = headerInfo(raw);
+      const { headers, keys, index: headerIndex } = header;
+      const missing = [
+        !keys.service && 'Servicio evaluado',
+        !keys.dependency && 'Unidad Administrativa o dependencia',
+        !keys.start && 'Hora de inicio o fecha'
+      ].filter(Boolean);
+      if (missing.length) {
+        const available = headers.filter(Boolean).slice(0, 20).join(', ') || 'ninguna';
+        throw new Error(`No se encontraron las columnas mínimas: ${missing.join('; ')}. Encabezados detectados: ${available}.`);
+      }
+      return raw.slice(headerIndex + 1).map((cells, index) => {
         if (!cells.some(value => clean(value))) return null;
         const obj = Object.fromEntries(headers.map((h, i) => [h, cells[i]]));
         const date = parseDate(obj[keys.start]);
@@ -103,7 +122,7 @@
         for (const item of ratingFields) ratings[item.key] = number(obj[keys[item.key]]);
         const suggestion = clean(obj[keys.suggestion]);
         const finalAverage = avg(Object.values(ratings).filter(v => v !== null));
-        const sourceRow = index + 2;
+        const sourceRow = headerIndex + index + 2;
         const sourceId = obj.ID ?? obj.Id;
         const id = clean(sourceId) || `fila-${sourceRow}`;
         const errors = [];
@@ -134,10 +153,17 @@
     }
     function parseWorkbook(buffer) {
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const sourceRows = mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }));
-      return { rows: sourceRows.filter(row => row.valid), sourceRows, sheetName };
+      const errors = [];
+      for (const sheetName of workbook.SheetNames) {
+        try {
+          const sheet = workbook.Sheets[sheetName];
+          const sourceRows = mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }));
+          return { rows: sourceRows.filter(row => row.valid), sourceRows, sheetName };
+        } catch (error) {
+          errors.push(`${sheetName}: ${error.message}`);
+        }
+      }
+      throw new Error(`No fue posible identificar una hoja válida. ${errors.join(' | ')}`);
     }
     function periodKey(row) {
       return row.date ? `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, '0')}` : '';
