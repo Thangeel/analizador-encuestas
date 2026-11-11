@@ -139,6 +139,19 @@
       }
       return state.filtered;
     }
+    function previousReportRows(current) {
+      const dependency = $('dependency').value;
+      const currentPeriod = [...new Set(current.map(periodKey).filter(Boolean))].sort().pop();
+      const candidates = [...state.previousRows, ...state.rows];
+      const unique = new Map();
+      candidates.forEach(row => {
+        const key = `${row.id}|${periodKey(row)}`;
+        if (!unique.has(key)) unique.set(key, row);
+      });
+      const periods = [...new Set([...unique.values()].map(periodKey).filter(period => period && (!currentPeriod || period < currentPeriod)))].sort();
+      const previousPeriod = periods[periods.length - 1];
+      return [...unique.values()].filter(row => periodKey(row) === previousPeriod && (dependency === 'all' || row.dependency === dependency));
+    }
     function updatePeriodLabel() {
       const mode = $('period').value;
       const month = $('month').value;
@@ -471,8 +484,9 @@
 
     function reportSnapshot() {
       const reportRows = currentReportRows();
+      const previousRows = previousReportRows(reportRows);
       const data = metrics(reportRows);
-      const narratives = reportNarratives(reportRows, state.previousRows);
+      const narratives = reportNarratives(reportRows, previousRows);
       return {
         metadata: {
           generatedAt: new Date().toISOString(),
@@ -524,8 +538,8 @@
       if (!snapshot.records.length || !window.docx) return;
       const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, ImageRun, AlignmentType } = window.docx;
       const cell = (value, bold = false, header = false) => new TableCell({
-        shading: header ? { fill: '215868' } : undefined,
-        children: [new Paragraph({ children: [new TextRun({ text: String(value ?? ''), bold, color: header ? 'FFFFFF' : '000000', font: 'Arial', size: 18 })] })]
+        shading: header ? { fill: 'A9C9D8' } : undefined,
+        children: [new Paragraph({ children: [new TextRun({ text: String(value ?? ''), bold, color: '000000', font: 'Arial', size: 18 })] })]
       });
       const headerRow = labels => new TableRow({ children: labels.map(label => cell(label, true, true)) });
       const table = (headers, rows) => new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow(headers), ...rows.map(row => new TableRow({ children: row.map(value => cell(value)) }))] });
@@ -543,12 +557,13 @@
       const criteriaRows = data.criteria.map(item => [item.label, `${item.average.toFixed(2)} / 5,00`]);
       const scoreRows = [[data.perfect.toFixed(0) === '0' ? '5,00' : '5,00', data.perfect, pct(data.perfect / data.total)], ['Inferior a 5,00', data.below.length, pct(data.below.length / data.total)], ['Total', data.total, '100,0 %']];
       const caseRows = data.below.map(row => [row.id, row.date ? row.date.toLocaleDateString('es-CO') : 'Sin fecha', row.dependency, row.service, row.ratings.solution ?? '', row.ratings.timeliness ?? '', row.ratings.attitude ?? '', row.ratings.clarity ?? '', row.average.toFixed(2)]);
+      const comparisonHeaders = snapshot.comparison ? ['Indicador', snapshot.comparison.previousPeriod, snapshot.metadata.period, 'Variación'] : [];
       const comparisonRowsLegacy = snapshot.comparison ? [
-        ['Total de encuestas', snapshot.comparison.previousPeriod, snapshot.summary.total, snapshot.comparison.total.previous, snapshot.comparison.total.difference],
-        ['Calificación promedio general', snapshot.comparison.previousPeriod, snapshot.summary.average.toFixed(2), snapshot.comparison.average.previous.toFixed(2), Math.abs(snapshot.comparison.average.difference) < 0.005 ? 'Se mantiene' : snapshot.comparison.average.difference.toFixed(2)],
-        ['Casos inferiores a 5,00', snapshot.comparison.previousPeriod, snapshot.summary.belowFive, snapshot.comparison.belowFive.previous, snapshot.comparison.belowFive.difference],
-        ['Dependencia con mayor participación', snapshot.comparison.previousPeriod, `${snapshot.comparison.dependency.current} (${snapshot.comparison.dependency.currentCount})`, `${snapshot.comparison.dependency.previous} (${snapshot.comparison.dependency.previousCount})`, 'Comparar'],
-        ['Servicio con mayor participación', snapshot.comparison.previousPeriod, `${snapshot.comparison.service.current} (${snapshot.comparison.service.currentCount})`, `${snapshot.comparison.service.previous} (${snapshot.comparison.service.previousCount})`, 'Comparar']
+        ['Total de encuestas', snapshot.comparison.total.previous, snapshot.comparison.total.current, snapshot.comparison.total.difference === 0 ? 'Se mantiene' : `${snapshot.comparison.total.difference > 0 ? '+' : ''}${snapshot.comparison.total.difference}`],
+        ['Calificación promedio general', `${snapshot.comparison.average.previous.toFixed(2).replace('.', ',')} / 5,00`, `${snapshot.comparison.average.current.toFixed(2).replace('.', ',')} / 5,00`, Math.abs(snapshot.comparison.average.difference) < 0.005 ? 'Se mantiene' : `${snapshot.comparison.average.difference > 0 ? '+' : ''}${snapshot.comparison.average.difference.toFixed(2).replace('.', ',')}`],
+        ['Casos con calificación inferior a 5,00', snapshot.comparison.belowFive.previous, snapshot.comparison.belowFive.current, snapshot.comparison.belowFive.difference === 0 ? 'Se mantiene' : `${snapshot.comparison.belowFive.difference > 0 ? '+' : ''}${snapshot.comparison.belowFive.difference} casos`],
+        ['Dependencia con mayor participación', `${snapshot.comparison.dependency.previous} (${snapshot.comparison.dependency.previousCount})`, `${snapshot.comparison.dependency.current} (${snapshot.comparison.dependency.currentCount})`, snapshot.comparison.dependency.currentCount - snapshot.comparison.dependency.previousCount === 0 ? 'Se mantiene' : `${snapshot.comparison.dependency.currentCount - snapshot.comparison.dependency.previousCount} encuestas`],
+        ['Servicio con mayor participación', `${snapshot.comparison.service.previous} (${snapshot.comparison.service.previousCount})`, `${snapshot.comparison.service.current} (${snapshot.comparison.service.currentCount})`, snapshot.comparison.service.currentCount === snapshot.comparison.service.previousCount ? 'Se mantiene' : snapshot.comparison.service.currentCount > snapshot.comparison.service.previousCount ? 'Aumentó' : 'Disminuyó']
       ] : [];
       const children = [];
       if (logoBytes) children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: logoBytes, transformation: { width: 185, height: 80 } })] }));
@@ -587,10 +602,10 @@
         table(['Promedio final por encuesta', 'Encuestas', 'Participación'], scoreRows),
         sectionTitle('Casos con calificaciones inferiores en alguno de los criterios:'),
         data.below.length ? table(['ID', 'Fecha', 'Dependencia', 'Servicio', 'Solución', 'Oportunidad', 'Actitud', 'Claridad', 'Promedio'], caseRows) : paragraph('No se identificaron casos con calificaciones inferiores a 5,00.'),
-        ...reportNarratives(reportRows, state.previousRows).cases.map(text => paragraph(text)),
+        ...snapshot.narratives.cases.map(text => paragraph(text)),
         sectionTitle('7. Comparativo respecto al mes anterior'),
         snapshot.comparison
-          ? table(['Indicador', 'Periodo anterior', 'Actual', 'Valor anterior', 'Variación'], comparisonRowsLegacy)
+          ? table(comparisonHeaders, comparisonRowsLegacy)
           : paragraph('No se encontraron meses anteriores para realizar el comparativo.'),
         sectionTitle('8. Observaciones relevantes'),
         new Paragraph({ children: [new TextRun({ text: 'Fortalezas identificadas:', bold: true, font: 'Arial', size: 20 })] }),
