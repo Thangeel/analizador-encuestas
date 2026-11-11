@@ -17,13 +17,17 @@
       }
     });
 
-    const state = { rows: [], filtered: [], previousRows: [], charts: {}, fileName: '', previousFileName: '', sheetName: '', previousSheetName: '' };
+    const state = { rows: [], sourceRows: [], filtered: [], previousRows: [], previousSourceRows: [], charts: {}, fileName: '', previousFileName: '', sheetName: '', previousSheetName: '', validation: null, previousValidation: null };
     const $ = id => document.getElementById(id);
     const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
     const norm = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const number = value => {
       if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-      const n = Number(String(value ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
+      const text = clean(value);
+      if (!text) return null;
+      const normalized = text.replace(',', '.').replace(/[^\d.-]/g, '');
+      if (!normalized || !/^-?\d+(\.\d+)?$/.test(normalized)) return null;
+      const n = Number(normalized);
       return Number.isFinite(n) ? n : null;
     };
     const money = value => new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 }).format(value);
@@ -52,15 +56,33 @@
       const wanted = possible.map(norm);
       return headers.find(h => wanted.includes(norm(h))) || headers.find(h => wanted.some(w => norm(h).includes(w)));
     }
+    function dateFromParts(year, month, day) {
+      const date = new Date(year, month, day);
+      return date.getFullYear() === year && date.getMonth() === month && date.getDate() === day ? date : null;
+    }
     function parseDate(value) {
-      if (value instanceof Date && !isNaN(value)) return value;
+      if (value instanceof Date && !isNaN(value)) {
+        const year = value.getUTCFullYear();
+        const month = value.getUTCMonth();
+        const day = value.getUTCDate();
+        return dateFromParts(year, month, day);
+      }
+      if (typeof value === 'number' && window.XLSX?.SSF?.parse_date_code) {
+        const parts = XLSX.SSF.parse_date_code(value);
+        if (parts && parts.y && parts.m && parts.d) return dateFromParts(parts.y, parts.m - 1, parts.d);
+      }
       const text = clean(value);
       const isoDate = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-      if (isoDate) return new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]));
+      if (isoDate) return dateFromParts(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]));
       const localDate = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
-      if (localDate) return new Date(Number(localDate[3]), Number(localDate[2]) - 1, Number(localDate[1]));
-      const d = new Date(value);
-      return isNaN(d) ? null : d;
+      if (localDate) return dateFromParts(Number(localDate[3]), Number(localDate[2]) - 1, Number(localDate[1]));
+      const textDate = text.match(/^(\d{1,2})\s+([A-Za-zÁÉÍÓÚáéíóú]+)\s+(\d{4})$/i);
+      if (textDate) {
+        const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+        const month = months.indexOf(norm(textDate[2]));
+        if (month >= 0) return dateFromParts(Number(textDate[3]), month, Number(textDate[1]));
+      }
+      return null;
     }
     function mapRows(raw) {
       const headers = raw.length ? raw[0].map(clean) : [];
@@ -68,15 +90,25 @@
       for (const [semantic, options] of Object.entries(aliases)) keys[semantic] = findKey(headers, options);
       if (!keys.service || !keys.dependency || !keys.start) throw new Error('No se encontraron las columnas mínimas de servicio, dependencia y fecha.');
       return raw.slice(1).map((cells, index) => {
+        if (!cells.some(value => clean(value))) return null;
         const obj = Object.fromEntries(headers.map((h, i) => [h, cells[i]]));
         const date = parseDate(obj[keys.start]);
         const ratings = {};
         for (const item of ratingFields) ratings[item.key] = number(obj[keys[item.key]]);
         const suggestion = clean(obj[keys.suggestion]);
         const finalAverage = avg(Object.values(ratings).filter(v => v !== null));
+        const sourceRow = index + 2;
+        const sourceId = obj.ID ?? obj.Id;
+        const id = clean(sourceId) || `fila-${sourceRow}`;
+        const errors = [];
+        if (!date) errors.push('Fecha inválida o ausente');
+        if (!clean(obj[keys.service])) errors.push('Servicio ausente');
+        if (!clean(obj[keys.dependency])) errors.push('Dependencia ausente');
         return {
-          row: index + 2,
-          id: obj.ID ?? obj.Id ?? index + 1,
+          row: sourceRow,
+          sourceRow,
+          id,
+          explicitId: Boolean(clean(sourceId)),
           service: clean(obj[keys.service]),
           dependency: clean(obj[keys.dependency]),
           respondent: clean(obj[keys.name]),
@@ -86,18 +118,20 @@
           year: date ? date.getFullYear() : null,
           ratings,
           average: finalAverage,
-          miguel: /miguel\s*[aá]ngel\s*correa|acompa[nñ]ada por miguel/i.test(suggestion)
+          raw: cells.slice(),
+          miguel: /miguel\s*[aá]ngel\s*correa|acompa[nñ]ada por miguel/i.test(suggestion),
+          validationErrors: errors,
+          valid: errors.length === 0,
+          recordKey: `${clean(sourceId) || 'sin-id'}|${date ? date.toISOString().slice(0, 10) : 'sin-fecha'}|${norm(obj[keys.service])}|${norm(obj[keys.dependency])}|${Object.values(ratings).join('|')}|${norm(suggestion)}`
         };
-      }).filter(r => r.service && r.dependency && r.date);
+      }).filter(Boolean);
     }
     function parseWorkbook(buffer) {
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
-      return {
-        rows: mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true })),
-        sheetName
-      };
+      const sourceRows = mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }));
+      return { rows: sourceRows.filter(row => row.valid), sourceRows, sheetName };
     }
     function periodKey(row) {
       return row.date ? `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, '0')}` : '';
@@ -113,20 +147,68 @@
       };
     }
     function options() {
+      const years = [...new Set(state.rows.map(r => r.year).filter(Boolean))].sort((a,b) => a-b);
       const months = [...new Set(state.rows.map(r => r.month).filter(Boolean))].sort((a,b) => a-b);
+      $('year').innerHTML = '<option value="all">Todos</option>' + years.map(year => `<option value="${year}">${year}</option>`).join('');
       $('month').innerHTML = '<option value="all">Todos</option>' + months.map(m => `<option value="${m}">${new Date(2020, m-1, 1).toLocaleString('es-CO', {month:'long'})}</option>`).join('');
       const deps = [...new Set(state.rows.map(r => r.dependency).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'));
       $('dependency').innerHTML = '<option value="all">Todas</option>' + deps.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
     }
+    function duplicateValues(rows, keySelector) {
+      const counts = new Map();
+      rows.forEach(row => {
+        const key = keySelector(row);
+        if (key) counts.set(key, (counts.get(key) || 0) + 1);
+      });
+      return [...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key);
+    }
+    function validateDataset(rows, sourceRows, filterError = '', processedRows = rows) {
+      const invalidSource = sourceRows.filter(row => !row.valid);
+      const sourceRowsByNumber = new Set(sourceRows.map(row => row.sourceRow));
+      const processedRowsByNumber = new Set(processedRows.map(row => row.sourceRow));
+      const omittedRows = processedRows.filter(row => !sourceRowsByNumber.has(row.sourceRow));
+      const duplicates = duplicateValues(processedRows, row => row.recordKey);
+      const duplicateIdsByPeriod = duplicateValues(processedRows.filter(row => row.explicitId), row => `${row.id}|${periodKey(row)}`);
+      const periodMismatches = processedRows.filter(row => !row.date || row.year !== row.date.getFullYear() || row.month !== row.date.getMonth() + 1);
+      const errors = [];
+      if (invalidSource.length) errors.push(`${invalidSource.length} registro(s) de origen no son válidos.`);
+      if (omittedRows.length || processedRowsByNumber.size !== processedRows.length) errors.push('Se detectaron registros omitidos o repetidos durante el procesamiento.');
+      if (duplicates.length || duplicateIdsByPeriod.length) errors.push('Se detectaron registros duplicados dentro de un mismo periodo.');
+      if (periodMismatches.length) errors.push('Se detectaron registros asignados a un año o mes diferente de su fecha.');
+      if (filterError) errors.push(filterError);
+      return {
+        ok: errors.length === 0,
+        errors,
+        sourceTotal: sourceRows.length,
+        processedTotal: processedRows.length,
+        filteredTotal: rows.length,
+        invalidTotal: invalidSource.length,
+        duplicateKeys: duplicates,
+        duplicateIdsByPeriod,
+        periodMismatches: periodMismatches.length,
+        omittedTotal: omittedRows.length
+      };
+    }
     function applyFilter() {
       const mode = $('period').value;
+      const year = $('year').value;
       const month = $('month').value;
       const quarter = $('quarter').value;
       const dependency = $('dependency').value;
+      const years = [...new Set(state.rows.map(row => row.year).filter(Boolean))];
+      const needsYear = year === 'all' && years.length > 1 && (mode === 'quarter' || (mode === 'month' && month !== 'all'));
+      const filterErrors = [];
+      if (needsYear) filterErrors.push('Seleccione un año para analizar el periodo sin mezclar meses de años diferentes.');
+      if (state.previousValidation && !state.previousValidation.ok) filterErrors.push(`El periodo anterior tiene inconsistencias: ${state.previousValidation.errors.join(' ')}`);
+      const filterError = filterErrors.join(' ');
       state.filtered = state.rows.filter(r => {
-        const periodOk = mode === 'all' || (mode === 'month' && (month === 'all' || String(r.month) === month)) || (mode === 'quarter' && (quarter === 'all' || String(Math.ceil(r.month / 3)) === quarter));
-        return periodOk && (dependency === 'all' || r.dependency === dependency);
+        const yearOk = year === 'all' || String(r.year) === year;
+        const periodOk = mode === 'all'
+          || (mode === 'month' && (month === 'all' || String(r.month) === month))
+          || (mode === 'quarter' && (quarter === 'all' || String(Math.ceil(r.month / 3)) === quarter));
+        return yearOk && periodOk && (dependency === 'all' || r.dependency === dependency);
       });
+      state.validation = validateDataset(state.filtered, state.sourceRows, filterError, state.rows);
       updatePeriodLabel();
       render();
     }
@@ -154,6 +236,7 @@
     }
     function updatePeriodLabel() {
       const mode = $('period').value;
+      const year = $('year').value;
       const month = $('month').value;
       const quarter = $('quarter').value;
       const dependency = $('dependency').value;
@@ -169,7 +252,7 @@
           3: 'Tercer trimestre',
           4: 'Cuarto trimestre'
         };
-        label = quarterNames[quarter];
+        label = `${quarterNames[quarter]}${year !== 'all' ? ` de ${year}` : ''}`;
       } else if (mode === 'month') {
         label = 'Todos los meses';
       } else if (mode === 'quarter') {
@@ -211,11 +294,14 @@
       renderQuality(rows);
       const reportRows = currentReportRows();
       $('report').textContent = buildReport(reportRows, group(reportRows, 'service'), group(reportRows, 'dependency'), reportRows.filter(row => row.average < 5).sort((a, b) => a.average - b.average), reportRows.filter(row => row.miguel).length);
-      ['exportWord', 'exportData', 'exportCsv'].forEach(id => { $(id).disabled = !total; });
+      if (state.validation && !state.validation.ok) {
+        $('status').className = 'status error';
+        $('status').textContent = `Validación detenida: ${state.validation.errors.join(' ')}`;
+      }
+      ['exportWord', 'exportData', 'exportCsv'].forEach(id => { $(id).disabled = !total || Boolean(state.validation && !state.validation.ok); });
     }
     function renderQuality(rows) {
-      const ids = rows.map(r => String(r.id)).filter(Boolean);
-      const duplicateIds = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+      const duplicateIds = state.validation?.duplicateIdsByPeriod || [];
       const missing = {
         'Fecha de inicio': rows.filter(r => !r.date).length,
         'Servicio evaluado': rows.filter(r => !r.service).length,
@@ -224,9 +310,14 @@
       };
       const rowsHtml = [
         ['Registros analizados', rows.length, 'OK'],
+        ['Registros originales', state.validation?.sourceTotal ?? rows.length, state.validation?.sourceTotal === state.validation?.processedTotal ? 'OK' : 'Revisar'],
+        ['Registros procesados', state.validation?.processedTotal ?? rows.length, state.validation?.invalidTotal ? `Revisar (${state.validation.invalidTotal} inválidos)` : 'OK'],
+        ['Registros omitidos', state.validation?.omittedTotal ?? 0, state.validation?.omittedTotal ? 'Revisar' : 'OK'],
         ['Participación por servicio', `${group(rows, 'service').reduce((a, b) => a + b.count, 0)}/${rows.length}`, '100 %'],
         ['Participación por dependencia', `${group(rows, 'dependency').reduce((a, b) => a + b.count, 0)}/${rows.length}`, '100 %'],
-        ['IDs duplicados', duplicateIds.length, duplicateIds.length ? `Revisar: ${duplicateIds.slice(0, 8).join(', ')}` : 'No detectados'],
+        ['Registros duplicados', state.validation?.duplicateKeys?.length || 0, state.validation?.duplicateKeys?.length ? 'Revisar' : 'No detectados'],
+        ['IDs duplicados por periodo', duplicateIds.length, duplicateIds.length ? `Revisar: ${duplicateIds.slice(0, 8).join(', ')}` : 'No detectados'],
+        ['Asignación temporal', state.validation?.periodMismatches || 0, state.validation?.periodMismatches ? 'Revisar' : 'OK'],
         ...Object.entries(missing).map(([label, count]) => [label, count, count ? 'Revisar' : 'OK'])
       ];
       $('qualityTable').innerHTML = `<table><thead><tr><th>Validación</th><th class="num">Resultado</th><th>Estado</th></tr></thead><tbody>${rowsHtml.map(row => `<tr><td>${esc(row[0])}</td><td class="num">${esc(row[1])}</td><td class="${String(row[2]).startsWith('OK') || row[2] === '100 %' || row[2] === 'No detectados' ? 'good' : 'risk'}">${esc(row[2])}</td></tr>`).join('')}</tbody></table>`;
@@ -235,9 +326,12 @@
       chart('service', 'serviceChart', { type: 'doughnut', data: { labels: services.map(x => x.key), datasets: [{ data: services.map(x => x.count), backgroundColor: ['#2563eb','#0f766e','#f59e0b','#9333ea','#ef4444','#64748b'] }] }, options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } } });
       const topDeps = deps.slice(0, 10).reverse();
       chart('dependency', 'dependencyChart', { type: 'bar', data: { labels: topDeps.map(x => x.key), datasets: [{ label: 'Encuestas', data: topDeps.map(x => x.count), backgroundColor: '#0f766e', borderRadius: 5 }] }, options: { maintainAspectRatio: false, indexAxis: 'y', scales: baseScales(), plugins: { legend: { display: false } } } });
-      const months = [...new Set(rows.map(r => r.month).filter(Boolean))].sort((a,b) => a-b);
-      const monthly = months.map(m => rows.filter(r => r.month === m).length);
-      chart('monthly', 'monthlyChart', { type: 'line', data: { labels: months.map(m => new Date(2020,m-1,1).toLocaleString('es-CO',{month:'short'})), datasets: [{ label: 'Encuestas', data: monthly, borderColor: '#2563eb', backgroundColor: '#dbeafe', fill: true, tension: .3 }] }, options: { maintainAspectRatio: false, scales: baseScales() } });
+      const periods = [...new Set(rows.map(periodKey).filter(Boolean))].sort();
+      const monthly = periods.map(period => rows.filter(r => periodKey(r) === period).length);
+      chart('monthly', 'monthlyChart', { type: 'line', data: { labels: periods.map(period => {
+        const [year, month] = period.split('-').map(Number);
+        return `${new Date(year, month - 1, 1).toLocaleString('es-CO', { month: 'short' })} ${year}`;
+      }), datasets: [{ label: 'Encuestas', data: monthly, borderColor: '#2563eb', backgroundColor: '#dbeafe', fill: true, tension: .3 }] }, options: { maintainAspectRatio: false, scales: baseScales() } });
       const criteria = ratingFields.map(item => avg(rows.map(r => r.ratings[item.key]).filter(v => v !== null)));
       chart('criteria', 'criteriaChart', { type: 'bar', data: { labels: ['Solución','Oportunidad','Actitud','Claridad'], datasets: [{ label: 'Promedio', data: criteria, backgroundColor: ['#2563eb','#0f766e','#f59e0b','#9333ea'], borderRadius: 5 }] }, options: { maintainAspectRatio: false, scales: { x: { grid: { display: false } }, y: { min: 0, max: 5, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } } });
     }
@@ -266,23 +360,30 @@
       const file = event.target.files[0];
       if (!file) return;
       state.fileName = file.name;
+      state.previousRows = [];
+      state.previousSourceRows = [];
+      state.previousFileName = '';
+      state.previousSheetName = '';
+      state.previousValidation = null;
       const reader = new FileReader();
       reader.onload = e => {
         try {
           const parsed = parseWorkbook(e.target.result);
           const periods = splitPeriods(parsed.rows);
           state.rows = parsed.rows;
+          state.sourceRows = parsed.sourceRows;
           if (periods.previous.length) {
             state.previousRows = periods.previous;
+            state.previousSourceRows = parsed.sourceRows.filter(row => periodKey(row) === periodKey(periods.previous[0]));
             state.previousFileName = `${file.name} · periodo anterior`;
           }
           state.sheetName = parsed.sheetName;
           options();
           $('fileName').textContent = file.name;
-          $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros detectados · hoja: ${state.sheetName}`;
+          $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros válidos de ${state.sourceRows.length.toLocaleString('es-CO')} filas con información · hoja: ${state.sheetName}`;
           $('status').className = 'status';
           $('status').textContent = periods.previous.length
-            ? `Archivo cargado y validado: ${state.rows.length.toLocaleString('es-CO')} registros. Se detectaron automáticamente el periodo actual y el anterior para el comparativo.`
+            ? `Archivo cargado: ${state.rows.length.toLocaleString('es-CO')} registros válidos. Se detectaron automáticamente el periodo actual y el anterior para el comparativo.`
             : 'Archivo cargado y validado localmente. Cargue el periodo anterior para completar el comparativo.';
           applyFilter();
         } catch (error) {
@@ -301,11 +402,18 @@
         try {
           const parsed = parseWorkbook(e.target.result);
           state.previousRows = parsed.rows;
+          state.previousSourceRows = parsed.sourceRows;
           state.previousSheetName = parsed.sheetName;
+          state.previousValidation = validateDataset(parsed.rows, parsed.sourceRows, '', parsed.rows);
           $('status').className = 'status';
-          $('status').textContent = `Periodo anterior cargado: ${state.previousRows.length.toLocaleString('es-CO')} registros.`;
+          $('status').textContent = state.previousValidation.ok
+            ? `Periodo anterior cargado: ${state.previousRows.length.toLocaleString('es-CO')} registros.`
+            : `Validación detenida en el periodo anterior: ${state.previousValidation.errors.join(' ')}`;
+          applyFilter();
         } catch (error) {
           state.previousRows = [];
+          state.previousSourceRows = [];
+          state.previousValidation = null;
           $('status').className = 'status error';
           $('status').textContent = error.message || 'No fue posible leer el periodo anterior.';
         }
@@ -313,6 +421,7 @@
       reader.readAsArrayBuffer(file);
     });
     $('period').addEventListener('change', () => { toggleControls(); applyFilter(); });
+    $('year').addEventListener('change', applyFilter);
     $('month').addEventListener('change', applyFilter);
     $('quarter').addEventListener('change', applyFilter);
     $('dependency').addEventListener('change', applyFilter);
@@ -496,7 +605,7 @@
           previousSheet: state.previousSheetName,
           period: monthYearLabel(reportRows),
           dateRange: dateRangeLabel(reportRows),
-          filter: { period: $('period').value, month: $('month').value, quarter: $('quarter').value, dependency: $('dependency').value }
+          filter: { period: $('period').value, year: $('year').value, month: $('month').value, quarter: $('quarter').value, dependency: $('dependency').value }
         },
         summary: { total: data.total, average: data.average, belowFive: data.below.length, perfect: data.perfect, miguelAngel: data.miguel },
         byService: data.services.map(item => ({ service: item.key, count: item.count, participation: item.count / data.total, average: item.average, miguelAngel: item.miguel })),
@@ -505,11 +614,12 @@
         byCriterion: data.criteria.map(item => ({ criterion: item.label, average: item.average })),
         scoreDistribution: [{ label: '5,00', count: data.perfect, participation: data.perfect / data.total }, { label: 'Inferior a 5,00', count: data.below.length, participation: data.below.length / data.total }],
         quality: data.quality,
+        validation: state.validation,
         cases: data.below.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, dependency: row.dependency, service: row.service, ratings: row.ratings, average: row.average, suggestion: row.suggestion })),
         narratives,
         comparison: narratives.comparison,
         historicalComparison: narratives.history,
-        records: reportRows.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, year: row.year, month: row.month, service: row.service, dependency: row.dependency, respondent: row.respondent, ratings: row.ratings, average: row.average, miguelAngel: row.miguel, suggestion: row.suggestion }))
+        records: reportRows.map(row => ({ id: row.id, sourceRow: row.sourceRow, recordKey: row.recordKey, date: row.date ? row.date.toISOString() : null, year: row.year, month: row.month, service: row.service, dependency: row.dependency, respondent: row.respondent, ratings: row.ratings, average: row.average, miguelAngel: row.miguel, suggestion: row.suggestion }))
       };
     }
 
