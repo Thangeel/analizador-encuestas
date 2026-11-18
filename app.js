@@ -3,12 +3,6 @@
     const authenticated = sessionStorage.getItem('survey-analyzer-authenticated') === 'true';
     if (authenticated) document.body.classList.add('authenticated');
     const get = id => document.getElementById(id);
-    function logError(context, error) {
-      const detail = error instanceof Error ? error.stack || error.message : String(error);
-      console.error(`[Analizador de encuestas] ${context}: ${detail}`, error);
-    }
-    window.addEventListener('error', event => logError('Error no controlado', event.error || event.message));
-    window.addEventListener('unhandledrejection', event => logError('Promesa rechazada sin controlar', event.reason));
     get('loginForm').addEventListener('submit', event => {
       event.preventDefault();
       const password = get('password').value;
@@ -23,17 +17,13 @@
       }
     });
 
-    const state = { rows: [], sourceRows: [], filtered: [], previousRows: [], previousSourceRows: [], charts: {}, fileName: '', previousFileName: '', sheetName: '', previousSheetName: '', validation: null, previousValidation: null };
+    const state = { rows: [], sourceRows: [], filtered: [], previousRows: [], previousSourceRows: [], charts: {}, fileName: '', previousFileName: '', sheetName: '', previousSheetName: '', validation: null };
     const $ = id => document.getElementById(id);
     const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
     const norm = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const number = value => {
       if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-      const text = clean(value);
-      if (!text) return null;
-      const normalized = text.replace(',', '.').replace(/[^\d.-]/g, '');
-      if (!normalized || !/^-?\d+(\.\d+)?$/.test(normalized)) return null;
-      const n = Number(normalized);
+      const n = Number(String(value ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
       return Number.isFinite(n) ? n : null;
     };
     const money = value => new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 }).format(value);
@@ -47,10 +37,10 @@
       { key: 'clarity', label: 'Claridad en las indicaciones' }
     ];
     const aliases = {
-      service: ['Servicio evaluado', 'Servicio'],
-      dependency: ['Unidad Administrativa', 'Dependencia', 'Unidad administrativa'],
+      service: ['Servicio evaluado'],
+      dependency: ['Unidad Administrativa'],
       name: ['Nombre2', 'Nombre'],
-      start: ['Hora de inicio', 'Fecha de inicio', 'Fecha y hora', 'Marca temporal', 'Timestamp'],
+      start: ['Hora de inicio'],
       suggestion: ['Sugerencias y/o recomendaciones'],
       solution: ['¿Se dio solución o respuesta a sus requerimientos?'],
       timeliness: ['¿Los servicios fueron prestados de manera oportuna?'],
@@ -62,59 +52,37 @@
       const wanted = possible.map(norm);
       return headers.find(h => wanted.includes(norm(h))) || headers.find(h => wanted.some(w => norm(h).includes(w)));
     }
-    function headerInfo(raw) {
-      let best = { index: -1, headers: [], keys: {}, score: -1 };
-      const limit = Math.min(raw.length, 20);
-      for (let index = 0; index < limit; index += 1) {
-        const headers = (raw[index] || []).map(clean);
-        const keys = {};
-        for (const [semantic, options] of Object.entries(aliases)) keys[semantic] = findKey(headers, options);
-        const score = Object.values(keys).filter(Boolean).length;
-        if (score > best.score) best = { index, headers, keys, score };
-      }
-      return best;
-    }
-    function dateFromParts(year, month, day) {
-      const date = new Date(year, month, day);
-      return date.getFullYear() === year && date.getMonth() === month && date.getDate() === day ? date : null;
-    }
     function parseDate(value) {
       if (value instanceof Date && !isNaN(value)) {
-        const year = value.getFullYear();
-        const month = value.getMonth();
-        const day = value.getDate();
-        return dateFromParts(year, month, day);
+        const year = value.getUTCFullYear();
+        const month = value.getUTCMonth();
+        const day = value.getUTCDate();
+        const normalized = new Date(year, month, day);
+        return normalized.getFullYear() === year && normalized.getMonth() === month && normalized.getDate() === day ? normalized : null;
       }
       if (typeof value === 'number' && window.XLSX?.SSF?.parse_date_code) {
         const parts = XLSX.SSF.parse_date_code(value);
-        if (parts && parts.y && parts.m && parts.d) return dateFromParts(parts.y, parts.m - 1, parts.d);
+        if (parts && parts.y && parts.m && parts.d) return new Date(parts.y, parts.m - 1, parts.d);
       }
       const text = clean(value);
       const isoDate = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-      if (isoDate) return dateFromParts(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]));
-      const localDate = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/);
-      if (localDate) return dateFromParts(Number(localDate[3]), Number(localDate[2]) - 1, Number(localDate[1]));
+      if (isoDate) return new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]));
+      const localDate = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+      if (localDate) return new Date(Number(localDate[3]), Number(localDate[2]) - 1, Number(localDate[1]));
       const textDate = text.match(/^(\d{1,2})\s+([A-Za-zÁÉÍÓÚáéíóú]+)\s+(\d{4})$/i);
       if (textDate) {
         const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
         const month = months.indexOf(norm(textDate[2]));
-        if (month >= 0) return dateFromParts(Number(textDate[3]), month, Number(textDate[1]));
+        if (month >= 0) return new Date(Number(textDate[3]), month, Number(textDate[1]));
       }
       return null;
     }
     function mapRows(raw) {
-      const header = headerInfo(raw);
-      const { headers, keys, index: headerIndex } = header;
-      const missing = [
-        !keys.service && 'Servicio evaluado',
-        !keys.dependency && 'Unidad Administrativa o dependencia',
-        !keys.start && 'Hora de inicio o fecha'
-      ].filter(Boolean);
-      if (missing.length) {
-        const available = headers.filter(Boolean).slice(0, 20).join(', ') || 'ninguna';
-        throw new Error(`No se encontraron las columnas mínimas: ${missing.join('; ')}. Encabezados detectados: ${available}.`);
-      }
-      return raw.slice(headerIndex + 1).map((cells, index) => {
+      const headers = raw.length ? raw[0].map(clean) : [];
+      const keys = {};
+      for (const [semantic, options] of Object.entries(aliases)) keys[semantic] = findKey(headers, options);
+      if (!keys.service || !keys.dependency || !keys.start) throw new Error('No se encontraron las columnas mínimas de servicio, dependencia y fecha.');
+      return raw.slice(1).map((cells, index) => {
         if (!cells.some(value => clean(value))) return null;
         const obj = Object.fromEntries(headers.map((h, i) => [h, cells[i]]));
         const date = parseDate(obj[keys.start]);
@@ -122,7 +90,7 @@
         for (const item of ratingFields) ratings[item.key] = number(obj[keys[item.key]]);
         const suggestion = clean(obj[keys.suggestion]);
         const finalAverage = avg(Object.values(ratings).filter(v => v !== null));
-        const sourceRow = headerIndex + index + 2;
+        const sourceRow = index + 2;
         const sourceId = obj.ID ?? obj.Id;
         const id = clean(sourceId) || `fila-${sourceRow}`;
         const errors = [];
@@ -143,27 +111,19 @@
           year: date ? date.getFullYear() : null,
           ratings,
           average: finalAverage,
-          raw: cells.slice(),
           miguel: /miguel\s*[aá]ngel\s*correa|acompa[nñ]ada por miguel/i.test(suggestion),
           validationErrors: errors,
           valid: errors.length === 0,
-          recordKey: `${clean(sourceId) || 'sin-id'}|${date ? date.toISOString().slice(0, 10) : 'sin-fecha'}|${norm(obj[keys.service])}|${norm(obj[keys.dependency])}|${Object.values(ratings).join('|')}|${norm(suggestion)}`
+          recordKey: `${id}|${date ? date.toISOString().slice(0, 10) : 'sin-fecha'}|${norm(obj[keys.service])}|${norm(obj[keys.dependency])}|${Object.values(ratings).join('|')}`
         };
       }).filter(Boolean);
     }
     function parseWorkbook(buffer) {
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-      const errors = [];
-      for (const sheetName of workbook.SheetNames) {
-        try {
-          const sheet = workbook.Sheets[sheetName];
-          const sourceRows = mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }));
-          return { rows: sourceRows.filter(row => row.valid), sourceRows, sheetName };
-        } catch (error) {
-          errors.push(`${sheetName}: ${error.message}`);
-        }
-      }
-      throw new Error(`No fue posible identificar una hoja válida. ${errors.join(' | ')}`);
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const sourceRows = mapRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true }));
+      return { rows: sourceRows.filter(row => row.valid), sourceRows, sheetName };
     }
     function periodKey(row) {
       return row.date ? `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, '0')}` : '';
@@ -186,49 +146,36 @@
       const deps = [...new Set(state.rows.map(r => r.dependency).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'));
       $('dependency').innerHTML = '<option value="all">Todas</option>' + deps.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
     }
-    function duplicateGroups(rows, keySelector) {
-      const groups = new Map();
+    function duplicateValues(rows, keySelector) {
+      const counts = new Map();
       rows.forEach(row => {
         const key = keySelector(row);
-        if (!key) return;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(row);
+        if (key) counts.set(key, (counts.get(key) || 0) + 1);
       });
-      return [...groups.entries()]
-        .filter(([, values]) => values.length > 1)
-        .map(([key, values]) => ({ key, rows: values.map(row => ({ sourceRow: row.sourceRow, id: row.id, period: periodKey(row) })) }));
+      return [...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key);
     }
-    function validateDataset(rows, sourceRows, filterError = '', processedRows = rows) {
+    function validateDataset(rows, sourceRows, filterError = '') {
       const invalidSource = sourceRows.filter(row => !row.valid);
       const sourceRowsByNumber = new Set(sourceRows.map(row => row.sourceRow));
-      const processedRowsByNumber = new Set(processedRows.map(row => row.sourceRow));
-      const omittedRows = processedRows.filter(row => !sourceRowsByNumber.has(row.sourceRow));
-      const duplicateGroupsFound = duplicateGroups(processedRows, row => row.recordKey);
-      const duplicateIdGroups = duplicateGroups(processedRows.filter(row => row.explicitId), row => `${row.id}|${periodKey(row)}`);
-      const duplicates = duplicateGroupsFound.map(group => group.key);
-      const duplicateIdsByPeriod = duplicateIdGroups.map(group => group.key);
-      const periodMismatches = processedRows.filter(row => !row.date || row.year !== row.date.getFullYear() || row.month !== row.date.getMonth() + 1);
-      const invalidDetails = invalidSource.map(row => `${row.sourceRow} (ID ${row.id}): ${row.validationErrors.join(', ')}`);
-      const duplicateDetails = [...duplicateGroupsFound, ...duplicateIdGroups]
-        .map(group => `filas ${group.rows.map(row => row.sourceRow).join(', ')}`)
-        .filter((detail, index, list) => list.indexOf(detail) === index);
+      const processedRowsByNumber = new Set(rows.map(row => row.sourceRow));
+      const omittedRows = rows.filter(row => !sourceRowsByNumber.has(row.sourceRow));
+      const duplicates = duplicateValues(rows, row => row.recordKey);
+      const duplicateIdsByPeriod = duplicateValues(rows.filter(row => row.explicitId), row => `${row.id}|${periodKey(row)}`);
+      const periodMismatches = rows.filter(row => !row.date || row.year !== row.date.getFullYear() || row.month !== row.date.getMonth() + 1);
       const errors = [];
-      if (invalidSource.length) errors.push(`${invalidSource.length} registro(s) de origen no son válidos. Filas: ${invalidDetails.slice(0, 8).join(' · ')}`);
-      if (omittedRows.length || processedRowsByNumber.size !== processedRows.length) errors.push('Se detectaron registros omitidos o repetidos durante el procesamiento.');
-      if (duplicates.length || duplicateIdsByPeriod.length) errors.push(`Se detectaron registros duplicados dentro de un mismo periodo. ${duplicateDetails.slice(0, 8).join(' · ')}`);
+      if (invalidSource.length) errors.push(`${invalidSource.length} registro(s) de origen no son válidos.`);
+      if (omittedRows.length || processedRowsByNumber.size !== rows.length) errors.push('Se detectaron registros omitidos o repetidos durante el procesamiento.');
+      if (duplicates.length || duplicateIdsByPeriod.length) errors.push('Se detectaron registros duplicados dentro de un mismo periodo.');
       if (periodMismatches.length) errors.push('Se detectaron registros asignados a un año o mes diferente de su fecha.');
       if (filterError) errors.push(filterError);
       return {
         ok: errors.length === 0,
         errors,
         sourceTotal: sourceRows.length,
-        processedTotal: processedRows.length,
-        filteredTotal: rows.length,
+        processedTotal: rows.length,
         invalidTotal: invalidSource.length,
-        invalidDetails,
         duplicateKeys: duplicates,
         duplicateIdsByPeriod,
-        duplicateDetails,
         periodMismatches: periodMismatches.length,
         omittedTotal: omittedRows.length
       };
@@ -240,11 +187,9 @@
       const quarter = $('quarter').value;
       const dependency = $('dependency').value;
       const years = [...new Set(state.rows.map(row => row.year).filter(Boolean))];
-      const needsYear = year === 'all' && years.length > 1 && (mode === 'quarter' || (mode === 'month' && month !== 'all'));
-      const filterErrors = [];
-      if (needsYear) filterErrors.push('Seleccione un año para analizar el periodo sin mezclar meses de años diferentes.');
-      if (state.previousValidation && !state.previousValidation.ok) filterErrors.push(`El periodo anterior tiene inconsistencias: ${state.previousValidation.errors.join(' ')}`);
-      const filterError = filterErrors.join(' ');
+      const filterError = mode === 'quarter' && year === 'all' && years.length > 1
+        ? 'Seleccione un año para analizar un trimestre sin mezclar años.'
+        : '';
       state.filtered = state.rows.filter(r => {
         const yearOk = year === 'all' || String(r.year) === year;
         const periodOk = mode === 'all'
@@ -252,7 +197,7 @@
           || (mode === 'quarter' && (quarter === 'all' || String(Math.ceil(r.month / 3)) === quarter));
         return yearOk && periodOk && (dependency === 'all' || r.dependency === dependency);
       });
-      state.validation = validateDataset(state.filtered, state.sourceRows, filterError, state.rows);
+      state.validation = validateDataset(state.filtered, state.sourceRows, filterError);
       updatePeriodLabel();
       render();
     }
@@ -280,7 +225,6 @@
     }
     function updatePeriodLabel() {
       const mode = $('period').value;
-      const year = $('year').value;
       const month = $('month').value;
       const quarter = $('quarter').value;
       const dependency = $('dependency').value;
@@ -296,7 +240,7 @@
           3: 'Tercer trimestre',
           4: 'Cuarto trimestre'
         };
-        label = `${quarterNames[quarter]}${year !== 'all' ? ` de ${year}` : ''}`;
+        label = quarterNames[quarter];
       } else if (mode === 'month') {
         label = 'Todos los meses';
       } else if (mode === 'quarter') {
@@ -341,7 +285,8 @@
       ['exportWord', 'exportData', 'exportCsv'].forEach(id => { $(id).disabled = !total; });
     }
     function renderQuality(rows) {
-      const duplicateIds = state.validation?.duplicateIdsByPeriod || [];
+      const ids = rows.map(r => String(r.id)).filter(Boolean);
+      const duplicateIds = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
       const missing = {
         'Fecha de inicio': rows.filter(r => !r.date).length,
         'Servicio evaluado': rows.filter(r => !r.service).length,
@@ -350,15 +295,9 @@
       };
       const rowsHtml = [
         ['Registros analizados', rows.length, 'OK'],
-        ['Registros originales', state.validation?.sourceTotal ?? rows.length, state.validation?.sourceTotal === state.validation?.processedTotal ? 'OK' : 'Revisar'],
-        ['Registros procesados', state.validation?.processedTotal ?? rows.length, state.validation?.invalidTotal ? `Revisar (${state.validation.invalidTotal} inválidos)` : 'OK'],
-        ['Registros omitidos', state.validation?.omittedTotal ?? 0, state.validation?.omittedTotal ? 'Revisar' : 'OK'],
         ['Participación por servicio', `${group(rows, 'service').reduce((a, b) => a + b.count, 0)}/${rows.length}`, '100 %'],
         ['Participación por dependencia', `${group(rows, 'dependency').reduce((a, b) => a + b.count, 0)}/${rows.length}`, '100 %'],
-        ['Registros duplicados', state.validation?.duplicateKeys?.length || 0, state.validation?.duplicateKeys?.length ? 'Revisar' : 'No detectados'],
-        ['IDs duplicados por periodo', duplicateIds.length, duplicateIds.length ? `Revisar: ${duplicateIds.slice(0, 8).join(', ')}` : 'No detectados'],
-        ['Asignación temporal', state.validation?.periodMismatches || 0, state.validation?.periodMismatches ? 'Revisar' : 'OK'],
-        ['Detalle de inconsistencias', state.validation?.errors?.join(' ') || 'Sin inconsistencias', state.validation?.ok ? 'OK' : 'Revisar'],
+        ['IDs duplicados', duplicateIds.length, duplicateIds.length ? `Revisar: ${duplicateIds.slice(0, 8).join(', ')}` : 'No detectados'],
         ...Object.entries(missing).map(([label, count]) => [label, count, count ? 'Revisar' : 'OK'])
       ];
       $('qualityTable').innerHTML = `<table><thead><tr><th>Validación</th><th class="num">Resultado</th><th>Estado</th></tr></thead><tbody>${rowsHtml.map(row => `<tr><td>${esc(row[0])}</td><td class="num">${esc(row[1])}</td><td class="${String(row[2]).startsWith('OK') || row[2] === '100 %' || row[2] === 'No detectados' ? 'good' : 'risk'}">${esc(row[2])}</td></tr>`).join('')}</tbody></table>`;
@@ -367,12 +306,9 @@
       chart('service', 'serviceChart', { type: 'doughnut', data: { labels: services.map(x => x.key), datasets: [{ data: services.map(x => x.count), backgroundColor: ['#2563eb','#0f766e','#f59e0b','#9333ea','#ef4444','#64748b'] }] }, options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } } });
       const topDeps = deps.slice(0, 10).reverse();
       chart('dependency', 'dependencyChart', { type: 'bar', data: { labels: topDeps.map(x => x.key), datasets: [{ label: 'Encuestas', data: topDeps.map(x => x.count), backgroundColor: '#0f766e', borderRadius: 5 }] }, options: { maintainAspectRatio: false, indexAxis: 'y', scales: baseScales(), plugins: { legend: { display: false } } } });
-      const periods = [...new Set(rows.map(periodKey).filter(Boolean))].sort();
-      const monthly = periods.map(period => rows.filter(r => periodKey(r) === period).length);
-      chart('monthly', 'monthlyChart', { type: 'line', data: { labels: periods.map(period => {
-        const [year, month] = period.split('-').map(Number);
-        return `${new Date(year, month - 1, 1).toLocaleString('es-CO', { month: 'short' })} ${year}`;
-      }), datasets: [{ label: 'Encuestas', data: monthly, borderColor: '#2563eb', backgroundColor: '#dbeafe', fill: true, tension: .3 }] }, options: { maintainAspectRatio: false, scales: baseScales() } });
+      const months = [...new Set(rows.map(r => r.month).filter(Boolean))].sort((a,b) => a-b);
+      const monthly = months.map(m => rows.filter(r => r.month === m).length);
+      chart('monthly', 'monthlyChart', { type: 'line', data: { labels: months.map(m => new Date(2020,m-1,1).toLocaleString('es-CO',{month:'short'})), datasets: [{ label: 'Encuestas', data: monthly, borderColor: '#2563eb', backgroundColor: '#dbeafe', fill: true, tension: .3 }] }, options: { maintainAspectRatio: false, scales: baseScales() } });
       const criteria = ratingFields.map(item => avg(rows.map(r => r.ratings[item.key]).filter(v => v !== null)));
       chart('criteria', 'criteriaChart', { type: 'bar', data: { labels: ['Solución','Oportunidad','Actitud','Claridad'], datasets: [{ label: 'Promedio', data: criteria, backgroundColor: ['#2563eb','#0f766e','#f59e0b','#9333ea'], borderRadius: 5 }] }, options: { maintainAspectRatio: false, scales: { x: { grid: { display: false } }, y: { min: 0, max: 5, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } } });
     }
@@ -401,34 +337,26 @@
       const file = event.target.files[0];
       if (!file) return;
       state.fileName = file.name;
-      state.previousRows = [];
-      state.previousSourceRows = [];
-      state.previousFileName = '';
-      state.previousSheetName = '';
-      state.previousValidation = null;
       const reader = new FileReader();
       reader.onload = e => {
         try {
           const parsed = parseWorkbook(e.target.result);
           const periods = splitPeriods(parsed.rows);
           state.rows = parsed.rows;
-          state.sourceRows = parsed.sourceRows;
           if (periods.previous.length) {
             state.previousRows = periods.previous;
-            state.previousSourceRows = parsed.sourceRows.filter(row => periodKey(row) === periodKey(periods.previous[0]));
             state.previousFileName = `${file.name} · periodo anterior`;
           }
           state.sheetName = parsed.sheetName;
           options();
           $('fileName').textContent = file.name;
-          $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros válidos de ${state.sourceRows.length.toLocaleString('es-CO')} filas con información · hoja: ${state.sheetName}`;
+          $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros detectados · hoja: ${state.sheetName}`;
           $('status').className = 'status';
           $('status').textContent = periods.previous.length
-            ? `Archivo cargado: ${state.rows.length.toLocaleString('es-CO')} registros válidos. Se detectaron automáticamente el periodo actual y el anterior para el comparativo.`
+            ? `Archivo cargado y validado: ${state.rows.length.toLocaleString('es-CO')} registros. Se detectaron automáticamente el periodo actual y el anterior para el comparativo.`
             : 'Archivo cargado y validado localmente. Cargue el periodo anterior para completar el comparativo.';
           applyFilter();
         } catch (error) {
-          logError(`Error al cargar el consolidado "${file.name}"`, error);
           $('status').className = 'status error';
           $('status').textContent = error.message || 'No fue posible leer el archivo.';
         }
@@ -444,17 +372,11 @@
         try {
           const parsed = parseWorkbook(e.target.result);
           state.previousRows = parsed.rows;
-          state.previousSourceRows = parsed.sourceRows;
           state.previousSheetName = parsed.sheetName;
-          state.previousValidation = validateDataset(parsed.rows, parsed.sourceRows, '', parsed.rows);
           $('status').className = 'status';
           $('status').textContent = `Periodo anterior cargado: ${state.previousRows.length.toLocaleString('es-CO')} registros.`;
-          applyFilter();
         } catch (error) {
-          logError(`Error al cargar el periodo anterior "${file.name}"`, error);
           state.previousRows = [];
-          state.previousSourceRows = [];
-          state.previousValidation = null;
           $('status').className = 'status error';
           $('status').textContent = error.message || 'No fue posible leer el periodo anterior.';
         }
@@ -462,7 +384,6 @@
       reader.readAsArrayBuffer(file);
     });
     $('period').addEventListener('change', () => { toggleControls(); applyFilter(); });
-    $('year').addEventListener('change', applyFilter);
     $('month').addEventListener('change', applyFilter);
     $('quarter').addEventListener('change', applyFilter);
     $('dependency').addEventListener('change', applyFilter);
@@ -498,6 +419,76 @@
       return first.getMonth() === last.getMonth() && first.getFullYear() === last.getFullYear()
         ? `${String(first.getDate()).padStart(2, '0')} al ${String(last.getDate()).padStart(2, '0')} de ${month} de ${year}`
         : `${first.toLocaleDateString('es-CO')} al ${last.toLocaleDateString('es-CO')}`;
+    }
+
+    function quarterPeriodMetadata(rows) {
+      const quarter = $('quarter').value;
+      const selectedYear = $('year').value;
+      const selectedYearNumber = Number(selectedYear);
+      const year = selectedYear !== 'all' && Number.isFinite(selectedYearNumber)
+        ? selectedYearNumber
+        : (rows.find(row => row.date)?.date.getFullYear() || new Date().getFullYear());
+      const names = {
+        1: 'Primer trimestre',
+        2: 'Segundo trimestre',
+        3: 'Tercer trimestre',
+        4: 'Cuarto trimestre'
+      };
+      const quarterNames = {
+        1: ['enero', 'febrero', 'marzo'],
+        2: ['abril', 'mayo', 'junio'],
+        3: ['julio', 'agosto', 'septiembre'],
+        4: ['octubre', 'noviembre', 'diciembre']
+      };
+      const months = quarterNames[quarter] || [];
+      if (!months.length) return null;
+      const startMonth = (Number(quarter) - 1) * 3 + 1;
+      const endMonth = startMonth + 2;
+      const quarterMonthNumbers = [startMonth, startMonth + 1, endMonth];
+      const presentMonthNumbers = quarterMonthNumbers.filter(month =>
+        rows.some(row => row.date && row.year === year && row.month === month)
+      );
+      const effectiveMonthNumbers = presentMonthNumbers.length ? presentMonthNumbers : quarterMonthNumbers;
+      const presentRows = rows.filter(row =>
+        row.date && row.year === year && effectiveMonthNumbers.includes(row.month)
+      ).sort((a, b) => a.date - b.date);
+      const lastSurveyDate = presentRows[presentRows.length - 1]?.date;
+      const startMonthNumber = effectiveMonthNumbers[0];
+      const startMonthName = new Date(year, startMonthNumber - 1, 1).toLocaleString('es-CO', { month: 'long' });
+      const endDate = lastSurveyDate || new Date(year, endMonth, 0);
+      const endMonthName = endDate.toLocaleString('es-CO', { month: 'long' });
+      const endDay = String(endDate.getDate()).padStart(2, '0');
+      return {
+        number: Number(quarter),
+        name: names[quarter],
+        year,
+        months: effectiveMonthNumbers.map(month => new Date(year, month - 1, 1).toLocaleString('es-CO', { month: 'long' })),
+        monthNumbers: effectiveMonthNumbers,
+        dateRange: `01 de ${startMonthName} al ${endDay} de ${endMonthName} de ${endDate.getFullYear()}`
+      };
+    }
+
+    function quarterlyComparison(reportRows) {
+      const quarter = quarterPeriodMetadata(reportRows);
+      if (!quarter) return null;
+      const monthMetrics = quarter.monthNumbers.map(month => {
+        const rows = reportRows.filter(row => row.year === quarter.year && row.month === month);
+        return {
+          month,
+          label: `${new Date(quarter.year, month - 1, 1).toLocaleString('es-CO', { month: 'long' })} ${quarter.year}`,
+          data: metrics(rows)
+        };
+      });
+      const trimester = metrics(reportRows);
+      const first = monthMetrics[0]?.data;
+      const last = monthMetrics[monthMetrics.length - 1]?.data;
+      return {
+        quarter,
+        monthMetrics,
+        trimester,
+        firstLabel: monthMetrics[0]?.label || '',
+        lastLabel: monthMetrics[monthMetrics.length - 1]?.label || ''
+      };
     }
 
     function metrics(rows) {
@@ -637,6 +628,8 @@
       const previousRows = previousReportRows(reportRows);
       const data = metrics(reportRows);
       const narratives = reportNarratives(reportRows, previousRows);
+      const isQuarterly = $('period').value === 'quarter' && $('quarter').value !== 'all';
+      const quarterMetadata = isQuarterly ? quarterPeriodMetadata(reportRows) : null;
       return {
         metadata: {
           generatedAt: new Date().toISOString(),
@@ -646,6 +639,8 @@
           previousSheet: state.previousSheetName,
           period: monthYearLabel(reportRows),
           dateRange: dateRangeLabel(reportRows),
+          isQuarterly,
+          quarter: quarterMetadata,
           filter: { period: $('period').value, year: $('year').value, month: $('month').value, quarter: $('quarter').value, dependency: $('dependency').value }
         },
         summary: { total: data.total, average: data.average, belowFive: data.below.length, perfect: data.perfect, miguelAngel: data.miguel },
@@ -655,12 +650,11 @@
         byCriterion: data.criteria.map(item => ({ criterion: item.label, average: item.average })),
         scoreDistribution: [{ label: '5,00', count: data.perfect, participation: data.perfect / data.total }, { label: 'Inferior a 5,00', count: data.below.length, participation: data.below.length / data.total }],
         quality: data.quality,
-        validation: state.validation,
         cases: data.below.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, dependency: row.dependency, service: row.service, ratings: row.ratings, average: row.average, suggestion: row.suggestion })),
         narratives,
         comparison: narratives.comparison,
         historicalComparison: narratives.history,
-        records: reportRows.map(row => ({ id: row.id, sourceRow: row.sourceRow, recordKey: row.recordKey, date: row.date ? row.date.toISOString() : null, year: row.year, month: row.month, service: row.service, dependency: row.dependency, respondent: row.respondent, ratings: row.ratings, average: row.average, miguelAngel: row.miguel, suggestion: row.suggestion }))
+        records: reportRows.map(row => ({ id: row.id, sourceRow: row.row, date: row.date ? row.date.toISOString() : null, year: row.year, month: row.month, service: row.service, dependency: row.dependency, respondent: row.respondent, ratings: row.ratings, average: row.average, miguelAngel: row.miguel, suggestion: row.suggestion }))
       };
     }
 
@@ -685,9 +679,8 @@
     });
 
     $('exportWord').addEventListener('click', async () => {
-      try {
-        const snapshot = reportSnapshot();
-        if (!snapshot.records.length || !window.docx) return;
+      const snapshot = reportSnapshot();
+      if (!snapshot.records.length || !window.docx) return;
       const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, ImageRun, AlignmentType } = window.docx;
       const cell = (value, bold = false, header = false) => new TableCell({
         shading: header ? { fill: 'A9C9D8' } : undefined,
@@ -709,6 +702,14 @@
       const criteriaRows = data.criteria.map(item => [item.label, `${item.average.toFixed(2)} / 5,00`]);
       const scoreRows = [[data.perfect.toFixed(0) === '0' ? '5,00' : '5,00', data.perfect, pct(data.perfect / data.total)], ['Inferior a 5,00', data.below.length, pct(data.below.length / data.total)], ['Total', data.total, '100,0 %']];
       const caseRows = data.below.map(row => [row.id, row.date ? row.date.toLocaleDateString('es-CO') : 'Sin fecha', row.dependency, row.service, row.ratings.solution ?? '', row.ratings.timeliness ?? '', row.ratings.attitude ?? '', row.ratings.clarity ?? '', row.average.toFixed(2)]);
+      const isQuarterly = snapshot.metadata.isQuarterly;
+      const quarterComparison = isQuarterly ? quarterlyComparison(reportRows) : null;
+      const quarterlyPeriodTitle = isQuarterly
+        ? `${snapshot.metadata.quarter.name.toUpperCase()} ${snapshot.metadata.quarter.year}`
+        : `MES DE ${snapshot.metadata.period}`;
+      const quarterlyDateRange = isQuarterly
+        ? snapshot.metadata.quarter.dateRange
+        : snapshot.metadata.dateRange;
       const comparisonHeaders = snapshot.comparison ? ['Indicador', snapshot.comparison.previousPeriod, snapshot.metadata.period, 'Variación'] : [];
       const comparisonRowsLegacy = snapshot.comparison ? [
         ['Total de encuestas', snapshot.comparison.total.previous, snapshot.comparison.total.current, snapshot.comparison.total.difference === 0 ? 'Se mantiene' : `${snapshot.comparison.total.difference > 0 ? '+' : ''}${snapshot.comparison.total.difference}`],
@@ -717,13 +718,29 @@
         ['Dependencia con mayor participación', `${snapshot.comparison.dependency.previous} (${snapshot.comparison.dependency.previousCount})`, `${snapshot.comparison.dependency.current} (${snapshot.comparison.dependency.currentCount})`, snapshot.comparison.dependency.currentCount - snapshot.comparison.dependency.previousCount === 0 ? 'Se mantiene' : `${snapshot.comparison.dependency.currentCount - snapshot.comparison.dependency.previousCount} encuestas`],
         ['Servicio con mayor participación', `${snapshot.comparison.service.previous} (${snapshot.comparison.service.previousCount})`, `${snapshot.comparison.service.current} (${snapshot.comparison.service.currentCount})`, snapshot.comparison.service.currentCount === snapshot.comparison.service.previousCount ? 'Se mantiene' : snapshot.comparison.service.currentCount > snapshot.comparison.service.previousCount ? 'Aumentó' : 'Disminuyó']
       ] : [];
+      const quarterlyHeaders = quarterComparison
+        ? ['Indicador', ...quarterComparison.monthMetrics.map(item => item.label), 'Trimestre', `Variación ${quarterComparison.firstLabel.split(' ')[0]}-${quarterComparison.lastLabel.split(' ')[0]}`]
+        : [];
+      const quarterMonthlyRows = quarterComparison ? quarterComparison.monthMetrics.map(item => item.data) : [];
+      const quarterlyRows = quarterComparison ? [
+        ['Total de encuestas', ...quarterMonthlyRows.map(item => item.total), quarterComparison.trimester.total,
+          quarterMonthlyRows[quarterMonthlyRows.length - 1].total - quarterMonthlyRows[0].total],
+        ['Calificación promedio general', ...quarterMonthlyRows.map(item => `${item.average.toFixed(2).replace('.', ',')} / 5,00`), `${quarterComparison.trimester.average.toFixed(2).replace('.', ',')} / 5,00`,
+          `${quarterMonthlyRows[quarterMonthlyRows.length - 1].average - quarterMonthlyRows[0].average > 0 ? '+' : ''}${(quarterMonthlyRows[quarterMonthlyRows.length - 1].average - quarterMonthlyRows[0].average).toFixed(2).replace('.', ',')}`],
+        ['Casos con promedio inferior a 5,00', ...quarterMonthlyRows.map(item => item.below.length), quarterComparison.trimester.below.length,
+          quarterMonthlyRows[quarterMonthlyRows.length - 1].below.length - quarterMonthlyRows[0].below.length],
+        ['Encuestas con promedio 5,00', ...quarterMonthlyRows.map(item => item.perfect), quarterComparison.trimester.perfect,
+          quarterMonthlyRows[quarterMonthlyRows.length - 1].perfect - quarterMonthlyRows[0].perfect],
+        ['Encuestas con acompañamiento Miguel Ángel Correa', ...quarterMonthlyRows.map(item => item.miguel), quarterComparison.trimester.miguel,
+          quarterMonthlyRows[quarterMonthlyRows.length - 1].miguel - quarterMonthlyRows[0].miguel]
+      ].map(row => row.map((value, index) => index === row.length - 1 && typeof value === 'number' ? `${value > 0 ? '+' : ''}${value}` : value)) : [];
       const children = [];
       if (logoBytes) children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: logoBytes, transformation: { width: 185, height: 80 } })] }));
       children.push(
         new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'INFORME GENERAL DE ENCUESTAS DE SATISFACCIÓN', bold: true, font: 'Arial', size: 28 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `MES DE ${snapshot.metadata.period}`, bold: true, font: 'Arial', size: 22 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: quarterlyPeriodTitle, bold: true, font: 'Arial', size: 22 })] }),
         new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: 'Elaborado por: Miguel Ángel Correa Cano', bold: true, font: 'Arial', size: 20 })] }),
-        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Periodo evaluado: ${snapshot.metadata.dateRange}`, font: 'Arial', size: 20 })] }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `Periodo evaluado: ${quarterlyDateRange}`, font: 'Arial', size: 20 })] }),
         paragraph(`Los resultados presentados corresponden al consolidado de encuestas de satisfacción del periodo ${snapshot.metadata.period.toLowerCase()}.`),
         table(['Indicador', 'Valor'], [
           ['Total de encuestas analizadas', data.total],
@@ -731,11 +748,13 @@
           ['Pregunta con menor promedio', `${data.criteria.slice().sort((a, b) => a.average - b.average)[0].label} (${data.criteria.slice().sort((a, b) => a.average - b.average)[0].average.toFixed(2)})`],
           ['Servicio con mayor participación', `${data.services[0]?.key || 'Sin dato'} - ${data.services[0]?.count || 0} encuestas (${pct((data.services[0]?.count || 0) / data.total)})`],
           ['Dependencia con mayor participación', `${data.deps[0]?.key || 'Sin dato'} - ${data.deps[0]?.count || 0} encuestas (${pct((data.deps[0]?.count || 0) / data.total)})`],
-          ['Encuestas con acompañamiento', `${data.miguel} (${pct(data.miguel / data.total)})`],
-          ['Encuestas complementarias', `${data.total - data.miguel} (${pct((data.total - data.miguel) / data.total)})`]
+          ['Encuestas con acompañamiento de Miguel Ángel Correa Cano', `${data.miguel} (${pct(data.miguel / data.total)})`],
+          ['Encuestas complementarias realizadas por mesa de servicio', `${data.total - data.miguel} (${pct((data.total - data.miguel) / data.total)})`]
         ]),
-        sectionTitle('1. Total de encuestas del mes'),
-        paragraph(`Durante ${snapshot.metadata.period.toLowerCase()} se registraron ${data.total} encuestas de satisfacción correspondientes a los diferentes servicios atendidos.`),
+        sectionTitle(isQuarterly ? '1. Total de encuestas del trimestre' : '1. Total de encuestas del mes'),
+        paragraph(isQuarterly
+          ? `Durante el ${snapshot.metadata.quarter.name.toLowerCase()} de ${snapshot.metadata.quarter.year} se registraron ${data.total} encuestas de satisfacción correspondientes a los diferentes servicios atendidos.`
+          : `Durante ${snapshot.metadata.period.toLowerCase()} se registraron ${data.total} encuestas de satisfacción correspondientes a los diferentes servicios atendidos.`),
         paragraph(`El resultado general fue de ${data.average.toFixed(2).replace('.', ',')} sobre 5,00, lo que refleja una percepción ${data.average >= 4.8 ? 'ampliamente favorable' : 'que requiere seguimiento'} por parte de los usuarios encuestados.`),
         paragraph(`De las ${data.total} encuestas, ${data.miguel} fueron identificadas con acompañamiento de Miguel Ángel Correa, equivalentes al ${pct(data.miguel / data.total)}; las ${data.total - data.miguel} restantes corresponden a encuestas complementarias.`),
         sectionTitle('2. Distribución de encuestas por servicio evaluado'),
@@ -755,10 +774,12 @@
         sectionTitle('Casos con calificaciones inferiores en alguno de los criterios:'),
         data.below.length ? table(['ID', 'Fecha', 'Dependencia', 'Servicio', 'Solución', 'Oportunidad', 'Actitud', 'Claridad', 'Promedio'], caseRows) : paragraph('No se identificaron casos con calificaciones inferiores a 5,00.'),
         ...snapshot.narratives.cases.map(text => paragraph(text)),
-        sectionTitle('7. Comparativo respecto al mes anterior'),
-        snapshot.comparison
-          ? table(comparisonHeaders, comparisonRowsLegacy)
-          : paragraph('No se encontraron meses anteriores para realizar el comparativo.'),
+        sectionTitle(isQuarterly ? '7. Comparativo mensual y consolidado trimestral' : '7. Comparativo respecto al mes anterior'),
+        isQuarterly
+          ? table(quarterlyHeaders, quarterlyRows)
+          : snapshot.comparison
+            ? table(comparisonHeaders, comparisonRowsLegacy)
+            : paragraph('No se encontraron meses anteriores para realizar el comparativo.'),
         sectionTitle('8. Observaciones relevantes'),
         new Paragraph({ children: [new TextRun({ text: 'Fortalezas identificadas:', bold: true, font: 'Arial', size: 20 })] }),
         ...snapshot.narratives.strengths.map(text => new Paragraph({ children: [new TextRun({ text, font: 'Arial', size: 20 })], bullet: { level: 0 } })),
@@ -779,11 +800,6 @@
         },
         sections: [{ properties: {}, children }]
       });
-        const blob = await Packer.toBlob(document);
-        downloadBlob(blob, `informe-encuestas-${snapshot.metadata.period.toLowerCase().replace(/\s+/g, '-')}.docx`);
-      } catch (error) {
-        logError('Error al generar el informe Word', error);
-        $('status').className = 'status error';
-        $('status').textContent = error.message || 'No fue posible generar el informe Word.';
-      }
+      const blob = await Packer.toBlob(document);
+      downloadBlob(blob, `informe-encuestas-${snapshot.metadata.period.toLowerCase().replace(/\s+/g, '-')}.docx`);
     });
