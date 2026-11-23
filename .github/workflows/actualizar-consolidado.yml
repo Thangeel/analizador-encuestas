@@ -46,3 +46,9 @@ jobs:
 
           echo "Autenticacion con Microsoft Entra exitosa"
           echo "Token recibido sin mostrar credenciales"
+
+          echo "Comprobando acceso a Microsoft Graph..."
+          HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            "https://graph.microsoft.com/v1.0/sites/itaguigovco-my.sharepoint.com:/personal/calidadtic_itagui_gov_co")
+          echo "Respuesta HTTP de Microsoft Graph: ${HTTP_CODE}"
