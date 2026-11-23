@@ -1,9 +1,11 @@
+
 name: Verificar automatizacion de encuestas
 
 on:
   workflow_dispatch:
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
@@ -11,9 +13,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Comprobar ejecucion
+      - name: Autenticar con Microsoft Entra
+        shell: bash
+        env:
+          CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
         run: |
-          echo "GitHub Actions funciona correctamente"
-          echo "Proyecto: Analizador de Encuestas TIC"
-          echo "La pagina y los informes no se modifican"
-          echo "Preparado para integrar Microsoft Graph"
+          set -euo pipefail
+
+          ASSERTION=$(curl -fsS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api%3A%2F%2FAzureADTokenExchange" \
+            | jq -r '.value')
+
+          test -n "$ASSERTION"
+          test "$ASSERTION" != "null"
+
+          RESPONSE=$(curl -fsS \
+            -X POST \
+            "https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token" \
+            --data-urlencode "client_id=${CLIENT_ID}" \
+            --data-urlencode "scope=https://graph.microsoft.com/.default" \
+            --data-urlencode "grant_type=client_credentials" \
+            --data-urlencode \
+            "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
+            --data-urlencode "client_assertion=${ASSERTION}")
+
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+
+          test -n "$ACCESS_TOKEN"
+          test "$ACCESS_TOKEN" != "null"
+
+          echo "Autenticacion con Microsoft Entra exitosa"
+          echo "Token recibido sin mostrar credenciales"
