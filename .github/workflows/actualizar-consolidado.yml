@@ -1,0 +1,19 @@
+name: Verificar automatizacion de encuestas
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Comprobar ejecucion
+        run: |
+          echo "GitHub Actions funciona correctamente"
+          echo "Proyecto: Analizador de Encuestas TIC"
+          echo "La pagina y los informes no se modifican"
+          echo "Preparado para integrar Microsoft Graph"
