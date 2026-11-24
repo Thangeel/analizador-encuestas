@@ -1,4 +1,5 @@
 
+
 name: Verificar automatizacion de encuestas
 
 on:
@@ -13,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Autenticar y verificar acceso al Excel
+      - name: Autenticar y verificar lectura del Excel
         shell: bash
         env:
           CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -49,17 +50,53 @@ jobs:
           test -n "$DRIVE_ID"
           test -n "$FILE_ID"
 
-          echo "Verificando acceso directo al Excel..."
+          BASE_URL="https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/items/${FILE_ID}"
+
+          echo "Verificando acceso al Excel..."
 
           HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            "https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/items/${FILE_ID}?\$select=id")
+            "${BASE_URL}?\$select=id")
 
           echo "Respuesta HTTP de Microsoft Graph: ${HTTP_CODE}"
 
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "EXITO: La aplicacion tiene acceso al Excel."
-          else
+          if [ "$HTTP_CODE" != "200" ]; then
             echo "ERROR: No se pudo acceder al Excel."
             exit 1
           fi
+
+          echo "EXITO: Acceso al archivo confirmado."
+
+          echo "Verificando descarga del contenido..."
+
+          TEMP_FILE=$(mktemp)
+          trap 'rm -f "$TEMP_FILE"' EXIT
+
+          curl -fsSL \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            "${BASE_URL}/content" \
+            -o "$TEMP_FILE"
+
+          test -s "$TEMP_FILE"
+
+          python3 - "$TEMP_FILE" <<'PY'
+          import sys
+          import zipfile
+          import os
+
+          path = sys.argv[1]
+
+          with zipfile.ZipFile(path) as workbook:
+              required = {"[Content_Types].xml", "xl/workbook.xml"}
+              if not required.issubset(workbook.namelist()):
+                  raise ValueError("El archivo no es un Excel XLSX valido")
+
+          print("EXITO: Archivo Excel descargado correctamente.")
+          print("Formato XLSX verificado.")
+          print(f"Tamano del archivo: {os.path.getsize(path)} bytes.")
+          PY
+
+          rm -f "$TEMP_FILE"
+
+          echo "Archivo temporal eliminado."
+          echo "PRUEBA COMPLETADA CORRECTAMENTE."
