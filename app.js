@@ -501,8 +501,7 @@
             $('connectMicrosoft').hidden = false;
           });
         } else {
-          $('connectMicrosoft').hidden = false;
-          setAutomaticLoadStatus('Conecte su cuenta institucional de Microsoft para cargar el consolidado automáticamente. También puede usar la carga manual.');
+          beginMicrosoftSignIn();
         }
       }).catch(error => {
         if (authenticated) {
