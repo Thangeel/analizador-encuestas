@@ -13,21 +13,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Autenticar con Microsoft Entra
+      - name: Autenticar y verificar acceso al Excel
         shell: bash
         env:
           CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          DRIVE_ID: ${{ secrets.DRIVE_ID }}
+          FILE_ID: ${{ secrets.FILE_ID }}
+
         run: |
           set -euo pipefail
 
           ASSERTION=$(curl -fsS \
             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api%3A%2F%2FAzureADTokenExchange" \
-            | jq -r '.value')
+            | jq -er '.value')
 
-          test -n "$ASSERTION"
-          test "$ASSERTION" != "null"
+          echo "::add-mask::$ASSERTION"
 
           RESPONSE=$(curl -fsS \
             -X POST \
@@ -35,20 +37,29 @@ jobs:
             --data-urlencode "client_id=${CLIENT_ID}" \
             --data-urlencode "scope=https://graph.microsoft.com/.default" \
             --data-urlencode "grant_type=client_credentials" \
-            --data-urlencode \
-            "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
+            --data-urlencode "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
             --data-urlencode "client_assertion=${ASSERTION}")
 
-          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -er '.access_token')
 
-          test -n "$ACCESS_TOKEN"
-          test "$ACCESS_TOKEN" != "null"
+          echo "::add-mask::$ACCESS_TOKEN"
 
           echo "Autenticacion con Microsoft Entra exitosa"
-          echo "Token recibido sin mostrar credenciales"
 
-          echo "Comprobando acceso a Microsoft Graph..."
+          test -n "$DRIVE_ID"
+          test -n "$FILE_ID"
+
+          echo "Verificando acceso directo al Excel..."
+
           HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            "https://graph.microsoft.com/v1.0/sites/itaguigovco-my.sharepoint.com:/personal/calidadtic_itagui_gov_co")
+            "https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/items/${FILE_ID}?\$select=id")
+
           echo "Respuesta HTTP de Microsoft Graph: ${HTTP_CODE}"
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "EXITO: La aplicacion tiene acceso al Excel."
+          else
+            echo "ERROR: No se pudo acceder al Excel."
+            exit 1
+          fi
