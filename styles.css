@@ -38,6 +38,7 @@
     .status.error { color: var(--red); background: #fef2f2; border-color: #fecaca; }
     .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-bottom: 18px; }
     .metric { grid-column: span 2; min-height: 112px; }
+    .span-3 { grid-column: span 3; }
     .metric .label { color: var(--muted); font-size: 12px; font-weight: 700; }
     .metric .value { margin-top: 12px; font-size: 25px; font-weight: 800; letter-spacing: -.03em; }
     .metric .hint { margin-top: 3px; color: var(--muted); font-size: 12px; }
@@ -58,6 +59,7 @@
     .empty { color: var(--muted); padding: 30px 12px; text-align: center; }
     .footer-note { color: var(--muted); font-size: 12px; margin-top: 10px; }
     body:not(.authenticated) .shell { display: none; }
+    body.public-report .shell { display: block; }
     .login-screen { min-height: 100vh; display: grid; place-items: center; padding: 20px; background: radial-gradient(circle at top, #dbeafe, #f4f7fb 52%); }
     body.authenticated .login-screen { display: none; }
     .login-card { width: min(100%, 410px); background: white; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 28px; }
