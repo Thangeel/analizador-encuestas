@@ -123,7 +123,7 @@
       authority: `https://login.microsoftonline.com/${TENANT_ID}`,
       redirectUri: window.location.href.split("#")[0]
     },
-    cache: { cacheLocation: "sessionStorage" }
+    cache: { cacheLocation: "LocalStorage" }
   });
 
   // Convierte el enlace de compartir en el id que pide Microsoft Graph
