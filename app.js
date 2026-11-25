@@ -3,7 +3,7 @@
     const authenticated = sessionStorage.getItem('survey-analyzer-authenticated') === 'true';
     if (authenticated) document.body.classList.add('authenticated');
     const get = id => document.getElementById(id);
-    get('loginForm').addEventListener('submit', async event => {
+    get('loginForm').addEventListener('submit', event => {
       event.preventDefault();
       const password = get('password').value;
       if (password === APP_PASSWORD) {
@@ -11,9 +11,6 @@
         document.body.classList.add('authenticated');
         get('password').value = '';
         get('loginError').textContent = '';
-        if (window.SURVEY_AUTH_CONFIG?.enabled) {
-          await beginMicrosoftSignIn();
-        }
       } else {
         get('loginError').textContent = 'Contraseña incorrecta.';
         get('password').select();
@@ -22,11 +19,6 @@
 
     const state = { rows: [], sourceRows: [], filtered: [], previousRows: [], previousSourceRows: [], charts: {}, fileName: '', previousFileName: '', sheetName: '', previousSheetName: '', validation: null };
     const $ = id => document.getElementById(id);
-    const graphAuthConfig = window.SURVEY_AUTH_CONFIG || {};
-    const graphScopes = ['Files.Read'];
-    let msalClient = null;
-    let msalRedirectResult = null;
-    let msalInitialization = null;
     const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
     const norm = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const number = value => {
@@ -146,79 +138,9 @@
         previous: rows.filter(row => periodKey(row) === previousPeriod)
       };
     }
-    function initializeMicrosoftAuth() {
-      if (!graphAuthConfig.enabled) return Promise.resolve(null);
-      if (!msalInitialization) {
-        msalInitialization = (async () => {
-          if (!window.msal?.PublicClientApplication) {
-            throw new Error('No se pudo cargar el inicio de sesión de Microsoft.');
-          }
-          msalClient = new window.msal.PublicClientApplication({
-            auth: {
-              clientId: graphAuthConfig.clientId,
-              authority: `https://login.microsoftonline.com/${graphAuthConfig.tenantId}`,
-              redirectUri: graphAuthConfig.redirectUri
-            },
-            cache: { cacheLocation: 'sessionStorage' }
-          });
-          await msalClient.initialize();
-          msalRedirectResult = await msalClient.handleRedirectPromise();
-          return msalClient;
-        })();
-      }
-      return msalInitialization;
-    }
-    function setAutomaticLoadStatus(message, isError = false) {
+    function setStatus(message, isError = false) {
       $('status').className = isError ? 'status error' : 'status';
       $('status').textContent = message;
-    }
-    async function beginMicrosoftSignIn() {
-      try {
-        const client = await initializeMicrosoftAuth();
-        if (!client) return;
-        setAutomaticLoadStatus('Conectando con la cuenta institucional de Microsoft…');
-        await client.loginRedirect({ scopes: graphScopes });
-      } catch (error) {
-        setAutomaticLoadStatus(`No fue posible iniciar sesión con Microsoft: ${error.message}`, true);
-        $('connectMicrosoft').hidden = false;
-      }
-    }
-    async function graphGet(url, accessToken) {
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        cache: 'no-store'
-      });
-      if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error('Microsoft no autorizó la lectura del archivo. Verifique el permiso delegado Files.Read y el acceso de su cuenta al Excel.');
-        }
-        if (response.status === 404) {
-          throw new Error('No se encontró el archivo en el OneDrive de la cuenta conectada.');
-        }
-        throw new Error(`Microsoft Graph respondió HTTP ${response.status}.`);
-      }
-      return response;
-    }
-    async function findPersonalWorkbook(accessToken) {
-      const fileName = clean(graphAuthConfig.workbookName);
-      if (!fileName) throw new Error('Falta configurar el nombre del archivo Excel.');
-      const query = encodeURIComponent(fileName.replace(/'/g, "''"));
-      let nextUrl = `https://graph.microsoft.com/v1.0/me/drive/root/search(q='${query}')?$select=id,name,parentReference,lastModifiedDateTime`;
-      const matches = [];
-      while (nextUrl) {
-        const response = await graphGet(nextUrl, accessToken);
-        const page = await response.json();
-        matches.push(...(page.value || []).filter(item => norm(item.name) === norm(fileName)));
-        nextUrl = page['@odata.nextLink'] || '';
-      }
-      const unique = [...new Map(matches.map(item => [`${item.parentReference?.driveId}|${item.id}`, item])).values()];
-      if (!unique.length) {
-        throw new Error(`No se encontró “${fileName}” en el OneDrive de la cuenta conectada. Confirme que inició sesión con la cuenta propietaria y que el nombre del archivo coincide.`);
-      }
-      if (unique.length > 1) {
-        throw new Error(`Hay más de un archivo llamado “${fileName}” en OneDrive. Deje una sola copia con ese nombre para evitar cargar la base equivocada.`);
-      }
-      return unique[0];
     }
     function applyParsedWorkbook(parsed, fileName, loadMessage) {
       const periods = splitPeriods(parsed.rows);
@@ -234,27 +156,10 @@
       options();
       $('fileName').textContent = fileName;
       $('fileMeta').textContent = `${state.rows.length.toLocaleString('es-CO')} registros detectados · hoja: ${state.sheetName}`;
-      setAutomaticLoadStatus(loadMessage || (periods.previous.length
+      setStatus(loadMessage || (periods.previous.length
         ? `Archivo cargado y validado: ${state.rows.length.toLocaleString('es-CO')} registros. Se detectaron automáticamente el periodo actual y el anterior para el comparativo.`
         : 'Archivo cargado y validado localmente. Cargue el periodo anterior para completar el comparativo.'));
       applyFilter();
-    }
-    async function loadPersonalWorkbook(accessToken) {
-      setAutomaticLoadStatus('Buscando el consolidado en su OneDrive…');
-      const file = await findPersonalWorkbook(accessToken);
-      const driveId = file.parentReference?.driveId;
-      if (!driveId) throw new Error('Microsoft Graph no devolvió la unidad del archivo.');
-      const contentUrl = `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(file.id)}/content`;
-      const response = await graphGet(contentUrl, accessToken);
-      const parsed = parseWorkbook(await response.arrayBuffer());
-      applyParsedWorkbook(parsed, file.name, `Consolidado cargado automáticamente desde OneDrive: ${parsed.rows.length.toLocaleString('es-CO')} registros.`);
-      $('connectMicrosoft').hidden = true;
-    }
-    async function loadOneDriveForAccount(account) {
-      const client = await initializeMicrosoftAuth();
-      if (!client || !account) throw new Error('Inicie sesión con su cuenta institucional de Microsoft.');
-      const token = await client.acquireTokenSilent({ scopes: graphScopes, account });
-      await loadPersonalWorkbook(token.accessToken);
     }
     function options() {
       const years = [...new Set(state.rows.map(r => r.year).filter(Boolean))].sort((a,b) => a-b);
@@ -466,7 +371,6 @@
       };
       reader.readAsArrayBuffer(file);
     });
-    $('connectMicrosoft').addEventListener('click', beginMicrosoftSignIn);
     $('previousFile').addEventListener('change', event => {
       const file = event.target.files[0];
       if (!file) return;
@@ -491,25 +395,6 @@
     $('month').addEventListener('change', applyFilter);
     $('quarter').addEventListener('change', applyFilter);
     $('dependency').addEventListener('change', applyFilter);
-    if (graphAuthConfig.enabled) {
-      initializeMicrosoftAuth().then(client => {
-        if (!client || !authenticated) return;
-        const account = msalRedirectResult?.account || client.getAllAccounts()[0];
-        if (account) {
-          loadOneDriveForAccount(account).catch(error => {
-            setAutomaticLoadStatus(`No fue posible cargar el consolidado automáticamente: ${error.message} Puede usar “Cargar consolidado Excel” como alternativa.`, true);
-            $('connectMicrosoft').hidden = false;
-          });
-        } else {
-          beginMicrosoftSignIn();
-        }
-      }).catch(error => {
-        if (authenticated) {
-          setAutomaticLoadStatus(`No fue posible preparar la conexión con Microsoft: ${error.message} La carga manual permanece disponible.`, true);
-          $('connectMicrosoft').hidden = false;
-        }
-      });
-    }
     function downloadBlob(blob, fileName) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
