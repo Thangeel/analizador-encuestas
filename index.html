@@ -108,5 +108,88 @@
     </section>
   </main>
   <script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.27.0/lib/msal-browser.min.js"></script>
+<script>
+(function () {
+  const TENANT_ID = "7b3bcaee-2ff6-44c6-9345-e1477ba948a6";
+  const CLIENT_ID = "e20fa396-b96e-4862-b09a-6e58d92873e6";
+  const LINK_ONEDRIVE = "https://itaguigovco-my.sharepoint.com/:x:/g/personal/miguel_correa_contratista_itagui_gov_co/IQCEqRIEyLPHRL_YgoH2Ofb5AQj5lfwogDMNTVBqwG5AbcI?e=VAamc7";
+  const NOMBRE = "Encuesta de satisfaccion Direccion TIC 2026.xlsx";
+  const SCOPES = ["Files.Read"];
+
+  const pca = new msal.PublicClientApplication({
+    auth: {
+      clientId: CLIENT_ID,
+      authority: `https://login.microsoftonline.com/${TENANT_ID}`,
+      redirectUri: window.location.href.split("#")[0]
+    },
+    cache: { cacheLocation: "LocalStorage" }
+  });
+
+  // Convierte el enlace de compartir en el id que pide Microsoft Graph
+  function shareId(url) {
+    const b64 = btoa(url).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+    return "u!" + b64;
+  }
+
+  async function obtenerToken(interactivo) {
+    await pca.initialize();
+    const account = pca.getAllAccounts()[0];
+    if (account) {
+      try {
+        return (await pca.acquireTokenSilent({ scopes: SCOPES, account })).accessToken;
+      } catch (e) { /* requiere login interactivo */ }
+    }
+    if (!interactivo) throw new Error("Se requiere iniciar sesión");
+    return (await pca.loginPopup({ scopes: SCOPES })).accessToken;
+  }
+
+  async function descargarConsolidado(interactivo) {
+    const token = await obtenerToken(interactivo);
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/shares/${shareId(LINK_ONEDRIVE)}/driveItem/content`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!r.ok) throw new Error(`Graph respondió ${r.status}`);
+    const blob = await r.blob();
+    return new File([blob], NOMBRE, {
+      type: blob.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    });
+  }
+
+  // Entrega el archivo al input existente y dispara su evento change,
+  // así se ejecuta la misma lógica que con la carga manual
+  function alInput(file) {
+    const input = document.getElementById("file");
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  async function cargarDesdeOneDrive(interactivo) {
+    const estado = document.getElementById("status");
+    try {
+      estado.textContent = "Descargando consolidado desde OneDrive...";
+      alInput(await descargarConsolidado(interactivo));
+      estado.textContent = "Consolidado cargado automáticamente desde OneDrive.";
+    } catch (err) {
+      console.error(err);
+      estado.textContent = "No se pudo cargar desde OneDrive. Usa el botón 'Actualizar desde OneDrive' o carga el archivo manualmente.";
+    }
+  }
+
+  // Botón para cargar o actualizar (abre el inicio de sesión si hace falta)
+  const btn = document.createElement("button");
+  btn.id = "btnOneDrive";
+  btn.className = "secondary";
+  btn.textContent = "Actualizar desde OneDrive";
+  btn.addEventListener("click", () => cargarDesdeOneDrive(true));
+  document.querySelector(".actions").prepend(btn);
+
+  // Al entrar: intenta carga automática sin ventana emergente
+  window.addEventListener("DOMContentLoaded", () => cargarDesdeOneDrive(false));
+})();
+</script>
 </body>
 </html>
