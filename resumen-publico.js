@@ -93,6 +93,7 @@
     select.innerHTML = data.periods.map((period, index) =>
       `<option value="${index}">${period.label}</option>`
     ).join('');
+    select.value = String(data.periods.length - 1);
     select.disabled = data.periods.length < 2;
     setStatus(data.message);
 
